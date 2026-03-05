@@ -198,6 +198,31 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         logger.warning(f"Model not ready, using fallback for query: {query}")
         return _fallback_answer(query), [], []
     
+    # Special handling: detect inventory/total count questions
+    query_lower = query.lower()
+    if any(phrase in query_lower for phrase in ['berapa batik', 'ada berapa batik', 'total batik', 'jumlah batik', 'berapa banyak batik']):
+        if any(word in query_lower for word in ['total', 'semua', 'seluruh', 'yang kamu', 'ketahui']):
+            # Return hardcoded inventory summary
+            inventory_answer = """Saat ini saya memiliki pengetahuan tentang 12 motif batik Indonesia:
+
+**Dari Kampung Batik Jetis, Sidoarjo (6 motif):**
+1. Liris - melambangkan ketangguhan menghadapi kesulitan
+2. Alun-Alun Contong - mengenang perlawanan kemerdekaan 1945
+3. Burung Merak - simbol keindahan abadi dan elegan
+4. Sekar Jagad - mewakili keberagaman dan kekayaan batik dunia
+5. Parang Jabon - pesan untuk tidak pernah menyerah
+6. Love Putihan - melambangkan cinta, kebahagiaan, dan kehangatan
+
+**Dari Surabaya (6 motif):**
+1. Kintir Kintiran - mewakili semangat adaptasi Arek Suroboyo
+2. Gembili Wonokromo - menggambarkan kehidupan komunitas kota
+3. Kembang Bungur - simbol solidaritas dan toleransi
+4. Sparkling - menampilkan seni tari dan kuliner Surabaya
+5. Remo Suroboyoan - terinspirasi dari Tari Remo yang heroik
+6. Abhi Boyo - cerita keberanian menghadapi ancaman besar"""
+            logger.info(f"Answered inventory question with hardcoded summary")
+            return inventory_answer, [], []
+    
     try:
         # Detect if this is a counting/enumeration question
         is_counting_question = any(word in query.lower() for word in ['berapa', 'berapa banyak', 'sebutkan', 'apa saja', 'ada berapa', 'jumlah', 'jenis'])
