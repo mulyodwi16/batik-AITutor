@@ -140,6 +140,26 @@ inventory_data = build_inventory_summary(chunks) if chunks else {}
 MODEL_READY  = embedder is not None and faiss_index is not None and tokenizer is not None
 logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 
+# ── Chunk metadata: tag each chunk with its location (built once at startup) ─
+# This enables metadata pre-filtering — a standard RAG pattern.
+# We inspect chunk text for section headers rather than hardcoding motif names.
+def _build_chunk_locations(chunks_data):
+    """Return a list mapping chunk_index → 'surabaya' | 'jetis' | None."""
+    locations = []
+    for chunk in chunks_data:
+        if 'Batik Motifs from Surabaya' in chunk or 'Surabaya' in chunk and 'Jetis' not in chunk:
+            locations.append('surabaya')
+        elif 'Kampung Batik Jetis' in chunk or 'Sidoarjo' in chunk or 'Jetis' in chunk:
+            locations.append('jetis')
+        else:
+            locations.append(None)   # general / shared knowledge
+    return locations
+
+chunk_locations = _build_chunk_locations(chunks) if chunks else []
+logger.info(f"📍 Chunk locations tagged: {chunk_locations.count('jetis')} jetis, "
+            f"{chunk_locations.count('surabaya')} surabaya, "
+            f"{chunk_locations.count(None)} general")
+
 # ============================================================
 # RAG + LLM FUNCTIONS  (pure pipeline — no keyword rules)
 # ============================================================
@@ -157,9 +177,23 @@ Rules:
 6. Answer in the same language the user used (Indonesian or English)."""
 
 
+# ── Named-entity location detection (proper nouns only — NOT intent routing) ─
+def _detect_location(query: str):
+    """Return 'surabaya', 'jetis', or None.
+    Only checks proper nouns (city/village names) — not topic or intent."""
+    q = query.lower()
+    if any(w in q for w in ['surabaya', 'putat jaya', 'wonokromo']):
+        return 'surabaya'
+    if any(w in q for w in ['jetis', 'sidoarjo', 'kampung batik jetis']):
+        return 'jetis'
+    return None
+
+
 def retrieve_topk(query, k=25):
-    """Embed query and return top-k chunk IDs+scores from FAISS.
-    k defaults to 25 (= all chunks) so the LLM always sees full context."""
+    """Embed query → FAISS top-k → optional metadata location filter.
+    When a city/village is named in the query, only chunks tagged to that
+    location (plus general chunks) are kept — this is standard metadata
+    pre-filtering, not keyword-based intent routing."""
     if not embedder or not faiss_index:
         return [], []
     try:
@@ -169,6 +203,20 @@ def retrieve_topk(query, k=25):
         scores, ids = faiss_index.search(q_emb, min(k, faiss_index.ntotal))
         id_list    = ids[0].tolist()
         score_list = scores[0].tolist()
+
+        # Metadata pre-filter: if query names a location, drop chunks from
+        # the OTHER location to keep context focused.
+        loc = _detect_location(query)
+        if loc and chunk_locations:
+            opposite = 'jetis' if loc == 'surabaya' else 'surabaya'
+            filtered_ids, filtered_scores = [], []
+            for cid, sc in zip(id_list, score_list):
+                if cid < len(chunk_locations) and chunk_locations[cid] != opposite:
+                    filtered_ids.append(cid)
+                    filtered_scores.append(sc)
+            id_list, score_list = filtered_ids, filtered_scores
+            logger.info(f"📍 Location filter '{loc}': {len(id_list)} chunks remain")
+
         logger.info(f"🔍 Retrieved {len(id_list)} chunks for: {query!r}")
         return id_list, score_list
     except Exception as e:
