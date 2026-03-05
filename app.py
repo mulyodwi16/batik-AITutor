@@ -64,11 +64,10 @@ def load_artifacts():
         else:
             logger.warning(f"⚠️  FAISS index not found at {index_path}")
         
-        # Load embedder model
+        # Load embedder model - force CPU (Ollama handles GPU; Python CUDA incompatible with this GPU)
         try:
-            embed_device = "cuda" if torch.cuda.is_available() else "cpu"
-            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=embed_device)
-            logger.info(f"✅ Embedder model loaded successfully on {embed_device}")
+            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+            logger.info("✅ Embedder model loaded successfully on cpu")
         except Exception as e:
             logger.error(f"❌ Error loading embedder: {e}")
             logger.warning("⚠️  Will use LLM-only mode without semantic search")
@@ -184,7 +183,8 @@ def retrieve_topk(query, k=5, threshold=0.25):
         q_emb = embedder.encode(
             [query],
             convert_to_numpy=True,
-            normalize_embeddings=True
+            normalize_embeddings=True,
+            device="cpu",
         ).astype("float32")
         
         scores, ids = faiss_index.search(q_emb, k)
@@ -241,15 +241,18 @@ def generate_rag_answer(query, k=10, max_tokens=200):
     
     # Special handling: detect inventory/total count questions
     query_lower = query.lower()
-    if any(phrase in query_lower for phrase in ['berapa batik', 'ada berapa batik', 'total batik', 'jumlah batik', 'berapa banyak batik']):
-        if any(word in query_lower for word in ['total', 'semua', 'seluruh', 'yang kamu', 'ketahui']):
-            # Return dynamic inventory summary if available
-            if inventory_summary:
-                logger.info(f"Answered inventory question with dynamic summary")
-                return inventory_summary, [], []
-            else:
-                logger.warning(f"Inventory summary not available, using fallback")
-                return _fallback_answer(query), [], []
+    is_inventory_question = (
+        ('berapa' in query_lower or 'jumlah' in query_lower or 'total' in query_lower) and
+        'batik' in query_lower and
+        any(w in query_lower for w in ['motif', 'jenis', 'macam', 'kamu', 'tahu', 'ketahui', 'ada', 'semua'])
+    )
+    if is_inventory_question:
+        if inventory_summary:
+            logger.info("Answered inventory question with dynamic summary")
+            return inventory_summary, [], []
+        else:
+            logger.warning("Inventory summary not available, using fallback")
+            return _fallback_answer(query), [], []
     
     try:
         # Detect if this is a counting/enumeration question
