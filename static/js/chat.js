@@ -32,15 +32,26 @@ function handleSubmit(event) {
     sendMessageToBackend(message);
 }
 
-function addMessage(text, sender) {
+function addMessage(text, sender, metadata = null) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `chat-message ${sender}-message`;
 
     if (sender === 'bot') {
+        let metadataHTML = '';
+        if (metadata && metadata.has_context) {
+            const score = (metadata.top_score * 100).toFixed(1);
+            metadataHTML = `
+                <div class="message-metadata">
+                    <small>📊 Confidence: ${score}% | ${metadata.retrieved_chunks.length} sources</small>
+                </div>
+            `;
+        }
+        
         messageDiv.innerHTML = `
             <div class="message-avatar">🤖</div>
             <div class="message-content">
                 <p>${escapeHtml(text)}</p>
+                ${metadataHTML}
             </div>
         `;
     } else {
@@ -100,7 +111,19 @@ async function sendMessageToBackend(message) {
 
         const data = await response.json();
         removeLoadingMessage();
-        addMessage(data.reply, 'bot');
+        
+        // Pass metadata untuk ditampilkan
+        const metadata = data.metadata || {};
+        addMessage(data.reply, 'bot', metadata);
+        
+        // Log metadata ke console untuk debugging
+        if (metadata.has_context) {
+            console.log('RAG Retrieval:', {
+                chunks: metadata.retrieved_chunks,
+                scores: metadata.retrieval_scores,
+                model: metadata.model_used
+            });
+        }
 
     } catch (error) {
         removeLoadingMessage();

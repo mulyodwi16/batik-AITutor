@@ -171,6 +171,16 @@ body {
     margin-bottom: 0;
 }
 
+/* Message Metadata (RAG Info) */
+.message-metadata {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    font-size: 0.8rem;
+    color: #666;
+    opacity: 0.85;
+}
+
 /* Loading Animation */
 .loading-dots {
     display: inline-flex;
