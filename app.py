@@ -92,23 +92,25 @@ def load_artifacts():
         return [], None, None
 
 def load_llm_model():
-    """Load LLM model (TinyLlama untuk efisiensi)"""
+    """Load LLM model (Llama-3.2-3B-Instruct)"""
     try:
         from transformers import AutoTokenizer, AutoModelForCausalLM
         
-        MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
         
         # Force CPU mode (CUDA disabled at top of file)
         device = "cpu"
         dtype = torch.float32
         
         logger.info(f"Loading LLM on {device} with dtype={dtype}")
+        logger.info(f"Model: {MODEL_NAME} (requires HuggingFace login with accepted license)")
         
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             device_map={"": device},
-            torch_dtype=dtype
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
         )
         model = model.to(device)
         
@@ -270,7 +272,7 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(query, k=effective_k, threshold=0.25)
         
-        # TinyLlama chat format: <|system|>...\n<|user|>...\n<|assistant|>
+        # Build messages using standard chat format (apply_chat_template handles any model)
         system_msg = "You are an expert on Indonesian batik. Answer questions clearly and concisely based only on the provided context. Do not invent information."
         
         if context:
@@ -293,11 +295,25 @@ Answer in 2-3 sentences using only information from the context above."""
 
 Answer briefly based on your knowledge of batik."""
         
-        prompt = f"<|system|>\n{system_msg}</s>\n<|user|>\n{user_msg}</s>\n<|assistant|>\n"
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": user_msg},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
         
         # Generate dengan LLM
         logger.info(f"Generating answer (counting={is_counting_question}, k={effective_k}) with context ({len(chunk_ids)} chunks)")
         inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
+        
+        # Build eos_token_ids - include <|eot_id|> for Llama 3.x
+        eos_ids = [tokenizer.eos_token_id]
+        eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        if eot_id and eot_id != tokenizer.unk_token_id:
+            eos_ids.append(eot_id)
         
         with torch.no_grad():
             output = llm_model.generate(
@@ -306,9 +322,9 @@ Answer briefly based on your knowledge of batik."""
                 temperature=0.2,
                 top_p=0.5,
                 do_sample=True,
-                repetition_penalty=1.4,  # Prevent LLM from looping/repeating sentences
-                no_repeat_ngram_size=4,  # No repeated 4-gram phrases
-                eos_token_id=tokenizer.eos_token_id,
+                repetition_penalty=1.4,
+                no_repeat_ngram_size=4,
+                eos_token_id=eos_ids,
                 pad_token_id=tokenizer.eos_token_id,
             )
         
@@ -343,7 +359,8 @@ def _clean_response(text, is_counting=False):
     """Clean up LLM response - remove artifacts, instructions, repetition"""
     import re
     
-    # Remove prompt leakage patterns (English prompts)
+    # Remove prompt leakage patterns (any model special tokens)
+    text = re.sub(r'<\|[^|>]+\|>', '', text)  # <|eot_id|>, <|start_header_id|>, etc.
     text = re.sub(r'<\|system\|>.*?<\|assistant\|>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<\|user\|>.*', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'Context about.*?Question:', '', text, flags=re.DOTALL | re.IGNORECASE)
