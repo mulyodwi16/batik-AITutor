@@ -1,0 +1,137 @@
+// Chat functionality
+const chatContainer = document.getElementById('chatContainer');
+const messageInput = document.getElementById('messageInput');
+const chatForm = document.getElementById('chatForm');
+const suggestionsContainer = document.getElementById('suggestionsContainer');
+
+// Send message on form submit
+chatForm.addEventListener('submit', handleSubmit);
+
+// Enter key to send
+messageInput.addEventListener('keypress', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSubmit(e);
+    }
+});
+
+function handleSubmit(event) {
+    event.preventDefault();
+    const message = messageInput.value.trim();
+
+    if (!message) return;
+
+    // Add user message to chat
+    addMessage(message, 'user');
+    messageInput.value = '';
+
+    // Hide suggestions
+    suggestionsContainer.classList.add('hidden');
+
+    // Send to backend
+    sendMessageToBackend(message);
+}
+
+function addMessage(text, sender) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${sender}-message`;
+
+    if (sender === 'bot') {
+        messageDiv.innerHTML = `
+            <div class="message-avatar">🤖</div>
+            <div class="message-content">
+                <p>${escapeHtml(text)}</p>
+            </div>
+        `;
+    } else {
+        messageDiv.innerHTML = `
+            <div class="message-content">
+                <p>${escapeHtml(text)}</p>
+            </div>
+            <div class="message-avatar">👤</div>
+        `;
+    }
+
+    chatContainer.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function addLoadingMessage() {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'chat-message bot-message';
+    messageDiv.id = 'loading-message';
+    messageDiv.innerHTML = `
+        <div class="message-avatar">🤖</div>
+        <div class="message-content">
+            <div class="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+
+    chatContainer.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function removeLoadingMessage() {
+    const loadingMsg = document.getElementById('loading-message');
+    if (loadingMsg) {
+        loadingMsg.remove();
+    }
+}
+
+async function sendMessageToBackend(message) {
+    addLoadingMessage();
+
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message: message })
+        });
+
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+
+        const data = await response.json();
+        removeLoadingMessage();
+        addMessage(data.reply, 'bot');
+
+    } catch (error) {
+        removeLoadingMessage();
+        addMessage('Maaf, terjadi kesalahan saat menghubungi server. Silakan coba lagi.', 'bot');
+        console.error('Error:', error);
+    }
+}
+
+function askQuestion(element) {
+    const question = element.textContent;
+    messageInput.value = question;
+    messageInput.focus();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Focus input on load
+window.addEventListener('load', function () {
+    messageInput.focus();
+});
+
+// Load suggestions on startup
+document.addEventListener('DOMContentLoaded', function () {
+    fetch('/api/suggestions')
+        .then(r => r.json())
+        .then(data => {
+            console.log('Suggestions loaded:', data);
+        })
+        .catch(error => console.error('Error loading suggestions:', error));
+});

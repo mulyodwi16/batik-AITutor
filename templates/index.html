@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batik AI-Tutor - Chatbot Pendidikan Batik Indonesia</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <h1>🎨 Batik AI-Tutor</h1>
+                    <p class="subtitle">Chatbot Pendidikan Warisan Budaya Batik Indonesia</p>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="chat-wrapper">
+                <!-- Chat Display Area -->
+                <div class="chat-container" id="chatContainer">
+                    <div class="chat-message bot-message">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content">
+                            <p>Halo! Saya adalah Batik AI-Tutor, siap membantu Anda mempelajari tentang batik Indonesia.
+                            </p>
+                            <p>Silakan tanyakan sesuatu tentang sejarah, motif, proses pembuatan, atau warisan budaya
+                                batik.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Suggestions -->
+                <div class="suggestions" id="suggestionsContainer">
+                    <p class="suggestions-label">Contoh pertanyaan:</p>
+                    <div class="suggestion-buttons">
+                        <button class="suggestion-btn" onclick="askQuestion(this)">Apa itu Batik?</button>
+                        <button class="suggestion-btn" onclick="askQuestion(this)">Sejarah Batik Indonesia</button>
+                        <button class="suggestion-btn" onclick="askQuestion(this)">Motif-motif Batik</button>
+                        <button class="suggestion-btn" onclick="askQuestion(this)">Proses pembuatan Batik</button>
+                        <button class="suggestion-btn" onclick="askQuestion(this)">Warisan Batik UNESCO</button>
+                    </div>
+                </div>
+
+                <!-- Input Area -->
+                <div class="input-area">
+                    <form id="chatForm" onsubmit="handleSubmit(event)">
+                        <div class="input-wrapper">
+                            <input type="text" id="messageInput" placeholder="Tanya sesuatu tentang Batik..."
+                                autocomplete="off" required>
+                            <button type="submit" class="send-btn" title="Kirim pesan">
+                                <span>➤</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Info Sidebar -->
+            <aside class="info-sidebar">
+                <div class="info-card">
+                    <h3>📚 Pelajari</h3>
+                    <ul>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Sejarah Batik'})">Sejarah</a></li>
+                        <li><a href="#" class="info-link" onclick="askQuestion({textContent: 'Motif Batik'})">Motif</a>
+                        </li>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Proses Batik'})">Proses</a></li>
+                        <li><a href="#" class="info-link" onclick="askQuestion({textContent: 'Warna Batik'})">Warna</a>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="info-card">
+                    <h3>🌍 Daerah</h3>
+                    <ul>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Batik Yogyakarta'})">Yogyakarta</a></li>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Batik Semarang'})">Semarang</a></li>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Batik Cirebon'})">Cirebon</a></li>
+                        <li><a href="#" class="info-link"
+                                onclick="askQuestion({textContent: 'Batik regional'})">Lainnya</a></li>
+                    </ul>
+                </div>
+
+                <div class="info-card">
+                    <h3>✨ Info</h3>
+                    <p style="font-size: 0.9em; color: #666;">
+                        Batik adalah warisan budaya tak benda (UNESCO) yang kaya akan makna dan keindahan.
+                    </p>
+                </div>
+            </aside>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2026 Batik AI-Tutor | Melestarikan Warisan Budaya Indonesia</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+
+</html>
