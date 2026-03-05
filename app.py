@@ -120,9 +120,59 @@ def load_llm_model():
         logger.error(traceback.format_exc())
         return None, None
 
+def build_inventory_summary(chunks_data):
+    """Build inventory summary dynamically from chunks"""
+    try:
+        import re
+        
+        inventory = {
+            'jetis': [],
+            'surabaya': []
+        }
+        
+        # Parse chunks to extract motif names and locations
+        for chunk in chunks_data:
+            chunk_lower = chunk.lower()
+            
+            # Detect location
+            location = None
+            if 'jetis' in chunk_lower or 'sidoarjo' in chunk_lower:
+                location = 'jetis'
+            elif 'surabaya' in chunk_lower or 'suroboyo' in chunk_lower:
+                location = 'surabaya'
+            
+            # Extract motif names (look for "### Motif Name" pattern)
+            motif_matches = re.findall(r'###\s+(\w+(?:\s+\w+)*?)\s+Motif', chunk)
+            for motif in motif_matches:
+                if location and motif not in inventory[location]:
+                    inventory[location].append(motif)
+        
+        # Build summary string
+        total = len(inventory['jetis']) + len(inventory['surabaya'])
+        summary = f"""Saat ini saya memiliki pengetahuan tentang {total} motif batik Indonesia:
+
+**Dari Kampung Batik Jetis, Sidoarjo ({len(inventory['jetis'])} motif):**
+"""
+        for i, motif in enumerate(inventory['jetis'], 1):
+            summary += f"{i}. {motif}\n"
+        
+        summary += f"\n**Dari Surabaya ({len(inventory['surabaya'])} motif):**\n"
+        for i, motif in enumerate(inventory['surabaya'], 1):
+            summary += f"{i}. {motif}\n"
+        
+        logger.info(f"✅ Inventory summary built: {total} motifs ({len(inventory['jetis'])} Jetis, {len(inventory['surabaya'])} Surabaya)")
+        return summary
+    
+    except Exception as e:
+        logger.error(f"❌ Error building inventory summary: {e}")
+        return None
+
 # Load everything at startup
 chunks, faiss_index, embedder = load_artifacts()
 tokenizer, llm_model = load_llm_model()
+
+# Build inventory summary dynamically from chunks
+inventory_summary = build_inventory_summary(chunks) if chunks else None
 
 # Flag untuk track model status
 MODEL_READY = embedder is not None and faiss_index is not None and llm_model is not None
@@ -202,26 +252,13 @@ def generate_rag_answer(query, k=10, max_tokens=200):
     query_lower = query.lower()
     if any(phrase in query_lower for phrase in ['berapa batik', 'ada berapa batik', 'total batik', 'jumlah batik', 'berapa banyak batik']):
         if any(word in query_lower for word in ['total', 'semua', 'seluruh', 'yang kamu', 'ketahui']):
-            # Return hardcoded inventory summary
-            inventory_answer = """Saat ini saya memiliki pengetahuan tentang 12 motif batik Indonesia:
-
-**Dari Kampung Batik Jetis, Sidoarjo (6 motif):**
-1. Liris - melambangkan ketangguhan menghadapi kesulitan
-2. Alun-Alun Contong - mengenang perlawanan kemerdekaan 1945
-3. Burung Merak - simbol keindahan abadi dan elegan
-4. Sekar Jagad - mewakili keberagaman dan kekayaan batik dunia
-5. Parang Jabon - pesan untuk tidak pernah menyerah
-6. Love Putihan - melambangkan cinta, kebahagiaan, dan kehangatan
-
-**Dari Surabaya (6 motif):**
-1. Kintir Kintiran - mewakili semangat adaptasi Arek Suroboyo
-2. Gembili Wonokromo - menggambarkan kehidupan komunitas kota
-3. Kembang Bungur - simbol solidaritas dan toleransi
-4. Sparkling - menampilkan seni tari dan kuliner Surabaya
-5. Remo Suroboyoan - terinspirasi dari Tari Remo yang heroik
-6. Abhi Boyo - cerita keberanian menghadapi ancaman besar"""
-            logger.info(f"Answered inventory question with hardcoded summary")
-            return inventory_answer, [], []
+            # Return dynamic inventory summary if available
+            if inventory_summary:
+                logger.info(f"Answered inventory question with dynamic summary")
+                return inventory_summary, [], []
+            else:
+                logger.warning(f"Inventory summary not available, using fallback")
+                return _fallback_answer(query), [], []
     
     try:
         # Detect if this is a counting/enumeration question
