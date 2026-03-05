@@ -190,10 +190,10 @@ def generate_rag_answer(query):
             logger.warning("No chunks retrieved — using fallback")
             return _fallback_answer(query), [], []
 
-        # ── 2. Build context — cap at 12 000 chars so Ollama stays within its
-        #       context window (gpt-oss:20b handles ~8 192 tokens ≈ 30 000 chars
-        #       but empirically starts failing above ~12 000 chars of context).
-        MAX_CONTEXT_CHARS = 12_000
+        # ── 2. Build context — cap to keep within Ollama's reliable generation
+        #       window. Top-ranked (most relevant) chunks are included first.
+        #       8 000 chars ≈ 2 000 tokens, well within num_ctx=8192 budget.
+        MAX_CONTEXT_CHARS = 8_000
         parts = []
         total_chars = 0
         for i, cid in enumerate(ids):
