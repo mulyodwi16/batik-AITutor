@@ -86,38 +86,26 @@ def load_artifacts():
         logger.error(traceback.format_exc())
         return [], None, None
 
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL    = "gpt-oss:20b"
+
 def load_llm_model():
-    """Load LLM model (TinyLlama on GPU if available)"""
+    """Check Ollama is reachable and the model is available.
+    Returns (OLLAMA_MODEL, None) on success, (None, None) on failure."""
+    import requests
     try:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        
-        MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-        
-        # Auto-detect GPU; fall back to CPU
-        if torch.cuda.is_available():
-            device = "cuda"
-            dtype = torch.float16  # float16 is fine on GPU
-            logger.info(f"🚀 GPU detected: {torch.cuda.get_device_name(0)} — loading model on GPU")
+        # Check Ollama server is up
+        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        r.raise_for_status()
+        available = [m["name"] for m in r.json().get("models", [])]
+        if OLLAMA_MODEL in available:
+            logger.info(f"✅ Ollama ready — model '{OLLAMA_MODEL}' found")
         else:
-            device = "cpu"
-            dtype = torch.float32  # float32 required on CPU
-            logger.info("⚠️  No GPU detected — loading model on CPU")
-        
-        logger.info(f"Loading {MODEL_NAME} on {device} with dtype={dtype}")
-        
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            device_map="auto",
-            torch_dtype=dtype,
-        )
-        
-        logger.info(f"✅ LLM model loaded: {MODEL_NAME} on {device}")
-        return tokenizer, model
+            logger.warning(f"⚠️  Model '{OLLAMA_MODEL}' not in Ollama ({available}). "
+                           f"Run: ollama pull {OLLAMA_MODEL}")
+        return OLLAMA_MODEL, None   # (model_name, None) — no tokenizer needed
     except Exception as e:
-        logger.error(f"❌ Error loading LLM: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"❌ Cannot reach Ollama at {OLLAMA_BASE_URL}: {e}")
         return None, None
 
 def build_inventory_summary(chunks_data):
@@ -169,13 +157,16 @@ def build_inventory_summary(chunks_data):
 
 # Load everything at startup
 chunks, faiss_index, embedder = load_artifacts()
-tokenizer, llm_model = load_llm_model()
+ollama_model_name, _ = load_llm_model()  # returns (model_name, None) — no tokenizer needed for Ollama
+
+# Reuse 'tokenizer' variable name for MODEL_READY check compatibility
+tokenizer = ollama_model_name  # truthy string = Ollama reachable, None = not reachable
 
 # Build inventory summary dynamically from chunks
 inventory_summary = build_inventory_summary(chunks) if chunks else None
 
-# Flag untuk track model status
-MODEL_READY = embedder is not None and faiss_index is not None and llm_model is not None
+# MODEL_READY: embedder + faiss must be loaded; Ollama model name must be set
+MODEL_READY = embedder is not None and faiss_index is not None and tokenizer is not None
 
 logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 
@@ -297,54 +288,33 @@ Answer briefly based on your knowledge of batik."""
             {"role": "system", "content": system_msg},
             {"role": "user",   "content": user_msg},
         ]
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
         
-        # Generate dengan LLM
-        logger.info(f"Generating answer (counting={is_counting_question}, k={effective_k}) with context ({len(chunk_ids)} chunks)")
-        inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
+        # Call Ollama API
+        import requests
+        logger.info(f"Calling Ollama '{OLLAMA_MODEL}' (counting={is_counting_question}, k={effective_k}, chunks={len(chunk_ids)})")
+        payload = {
+            "model": OLLAMA_MODEL,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "top_p": 0.5,
+                "repeat_penalty": 1.4,
+                "num_predict": 300 if is_counting_question else 200,
+            }
+        }
+        r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=120)
+        r.raise_for_status()
+        response = r.json()["message"]["content"].strip()
         
-        # Build eos_token_ids - include <|eot_id|> for Llama 3.x
-        eos_ids = [tokenizer.eos_token_id]
-        eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
-        if eot_id and eot_id != tokenizer.unk_token_id:
-            eos_ids.append(eot_id)
-        
-        with torch.no_grad():
-            output = llm_model.generate(
-                **inputs,
-                max_new_tokens=250 if is_counting_question else 180,
-                temperature=0.2,
-                top_p=0.5,
-                do_sample=True,
-                repetition_penalty=1.4,
-                no_repeat_ngram_size=4,
-                eos_token_id=eos_ids,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-        
-        # Decode answer
-        response = tokenizer.decode(
-            output[0][inputs["input_ids"].shape[1]:],
-            skip_special_tokens=True
-        ).strip()
-        
-        # Clean up response - AGGRESSIVE cleaning for counting questions
+        # Light cleanup (Ollama usually returns clean text)
         response = _clean_response(response, is_counting=is_counting_question)
         
-        # Validate answer is not just raw chunk (sanity check)
         if not response or len(response) < 10:
-            logger.warning(f"Answer too short or empty, using fallback")
+            logger.warning("Answer too short or empty, using fallback")
             return _fallback_answer(query), chunk_ids, scores
         
-        # Clean up to prevent memory leak
-        del inputs, output
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        
-        logger.info(f"✓ Generated synthesized answer ({len(response)} chars) with {len(chunk_ids)} sources")
+        logger.info(f"✓ Ollama answer ({len(response)} chars) with {len(chunk_ids)} sources")
         return response, chunk_ids, scores
     
     except Exception as e:
