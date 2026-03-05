@@ -287,29 +287,55 @@ def generate_rag_answer(query, k=10, max_tokens=200):
     
     # Special handling: detect inventory/total count questions (Indonesian & English)
     query_lower = query.lower()
-    is_inventory_question = (
+
+    # --- Trigger 1: count / list words ---
+    _count_words = [
         # Indonesian
-        ('berapa' in query_lower or 'jumlah' in query_lower or 'total' in query_lower) and
-        'batik' in query_lower and
-        any(w in query_lower for w in ['motif', 'jenis', 'macam', 'kamu', 'tahu', 'ketahui', 'ada', 'semua'])
-    ) or (
+        'berapa', 'ada berapa', 'jumlah', 'total', 'banyak', 'apa saja',
+        'sebutkan', 'daftar', 'semua', 'seluruh',
         # English
-        ('how many' in query_lower or 'how much' in query_lower or 'total' in query_lower) and
-        'batik' in query_lower and
-        any(w in query_lower for w in ['motif', 'type', 'kind', 'know', 'you'])
-    )
+        'how many', 'how much', 'total', 'count', 'number of',
+        'list', 'list all', 'show all', 'show me all', 'tell me all',
+        'what are', 'what batik', 'which are', 'which batik',
+        'enumerate', 'give me', 'name all', 'mention all',
+    ]
+    has_count = any(w in query_lower for w in _count_words)
+
+    # --- Trigger 2: batik / motif reference ---
+    _batik_words = [
+        'batik', 'motif', 'motifs', 'jenis', 'macam',
+        'type', 'types', 'kind', 'kinds', 'pattern', 'patterns',
+        'koleksi', 'collection', 'corak',
+    ]
+    has_batik = any(w in query_lower for w in _batik_words)
+
+    # --- Trigger 3: self / knowledge reference ---
+    _self_words = [
+        # Indonesian
+        'kamu', 'kau', 'anda', 'lu', 'lo', 'lo tau', 'lo tahu',
+        'tahu', 'tau', 'ketahui', 'punya', 'miliki', 'ada',
+        # English
+        'you', 'your', 'know', 'have', 'aware', 'covered', 'learned',
+    ]
+    has_self = any(w in query_lower for w in _self_words)
+
+    # --- Location detected in query ---
+    _inv_location = detect_location(query_lower)
+
+    # Inventory question = (count/list word) AND (batik ref OR location detected)
+    # Self-reference is optional — user may not always say "you know"
+    is_inventory_question = has_count and (has_batik or _inv_location is not None)
     if is_inventory_question:
         if inventory_summary:
             # Check if asking about a specific location
-            inv_location = detect_location(query_lower)
-            if inv_location == 'surabaya' and inventory_data.get('surabaya'):
+            if _inv_location == 'surabaya' and inventory_data.get('surabaya'):
                 motifs = inventory_data['surabaya']
                 loc_summary = f"I know {len(motifs)} batik motifs from Surabaya:\n"
                 for i, m in enumerate(motifs, 1):
                     loc_summary += f"{i}. {m}\n"
                 logger.info(f"Answered location inventory: surabaya ({len(motifs)} motifs)")
                 return loc_summary, [], []
-            elif inv_location == 'jetis' and inventory_data.get('jetis'):
+            elif _inv_location == 'jetis' and inventory_data.get('jetis'):
                 motifs = inventory_data['jetis']
                 loc_summary = f"I know {len(motifs)} batik motifs from Kampung Batik Jetis, Sidoarjo:\n"
                 for i, m in enumerate(motifs, 1):
