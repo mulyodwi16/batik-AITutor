@@ -46,7 +46,7 @@ function addMessage(text, sender, metadata = null) {
                 </div>
             `;
         }
-        
+
         messageDiv.innerHTML = `
             <div class="message-avatar">🤖</div>
             <div class="message-content">
@@ -111,11 +111,11 @@ async function sendMessageToBackend(message) {
 
         const data = await response.json();
         removeLoadingMessage();
-        
+
         // Pass metadata untuk ditampilkan
         const metadata = data.metadata || {};
         addMessage(data.reply, 'bot', metadata);
-        
+
         // Log metadata ke console untuk debugging
         if (metadata.has_context) {
             console.log('RAG Retrieval:', {

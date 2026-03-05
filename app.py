@@ -21,13 +21,27 @@ logger = logging.getLogger(__name__)
 def load_chunks():
     chunks_path = 'artifacts/chunks.json'
     if os.path.exists(chunks_path):
-        with open(chunks_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # Handle both {"chunks": [...]} and [...]
-            if isinstance(data, dict):
-                return data.get('chunks', data)
-            return data
-    return []
+        try:
+            with open(chunks_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Handle both {"chunks": [...]} and [...]
+                if isinstance(data, dict):
+                    chunks = data.get('chunks', data)
+                else:
+                    chunks = data
+                
+                if isinstance(chunks, list) and len(chunks) > 0:
+                    logger.info(f"✅ Chunks loaded from {chunks_path}: {len(chunks)} chunks")
+                    return chunks
+                else:
+                    logger.warning(f"⚠️  chunks.json exists but is empty or invalid")
+                    return []
+        except Exception as e:
+            logger.error(f"❌ Error parsing chunks.json: {e}")
+            return []
+    else:
+        logger.warning(f"⚠️  {chunks_path} not found. RAG will be disabled. Run AI_Tutor.ipynb to generate artifacts.")
+        return []
 
 def load_artifacts():
     """Load FAISS index, chunks, and embedder"""
@@ -37,18 +51,38 @@ def load_artifacts():
         
         chunks = load_chunks()
         index = None
+        embedder = None
         
+        # Load FAISS index
         index_path = 'artifacts/faiss.index'
         if os.path.exists(index_path):
-            index = faiss.read_index(index_path)
+            try:
+                index = faiss.read_index(index_path)
+                logger.info(f"✅ FAISS index loaded: {index.ntotal} vectors")
+            except Exception as e:
+                logger.error(f"❌ Error loading FAISS index: {e}")
+        else:
+            logger.warning(f"⚠️  FAISS index not found at {index_path}")
         
         # Load embedder model
-        embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        try:
+            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+            logger.info("✅ Embedder model loaded successfully")
+        except Exception as e:
+            logger.error(f"❌ Error loading embedder: {e}")
+            logger.warning("⚠️  Will use LLM-only mode without semantic search")
         
-        logger.info(f"✅ RAG artifacts loaded: {len(chunks)} chunks, FAISS index ready")
+        if chunks and index and embedder:
+            logger.info(f"✅ RAG artifacts fully loaded: {len(chunks)} chunks")
+        else:
+            logger.warning(f"⚠️  Partial artifact loading - chunks:{len(chunks)}, faiss:{index is not None}, embedder:{embedder is not None}")
+        
         return chunks, index, embedder
+    
     except Exception as e:
-        logger.error(f"❌ Error loading artifacts: {e}")
+        logger.error(f"❌ Error in load_artifacts: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return [], None, None
 
 def load_llm_model():
