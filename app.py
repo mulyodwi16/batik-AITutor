@@ -118,9 +118,10 @@ logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 # RAG + LLM FUNCTIONS
 # ============================================================
 
-def retrieve_topk(query, k=5, threshold=0.35):
+def retrieve_topk(query, k=5, threshold=0.25):
     """Retrieve top-k relevant chunks using FAISS"""
     if not embedder or not faiss_index:
+        logger.warning(f"Embedder or FAISS index not available. Cannot retrieve for query: {query}")
         return [], []
     
     try:
@@ -131,41 +132,60 @@ def retrieve_topk(query, k=5, threshold=0.35):
         ).astype("float32")
         
         scores, ids = faiss_index.search(q_emb, k)
-        return ids[0].tolist(), scores[0].tolist()
+        result_ids = ids[0].tolist()
+        result_scores = scores[0].tolist()
+        
+        logger.info(f"🔍 Retrieved top-{k} for '{query}': IDs={result_ids}, Scores={[f'{s:.3f}' for s in result_scores]}")
+        return result_ids, result_scores
     except Exception as e:
         logger.error(f"Error in retrieve_topk: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return [], []
 
-def build_rag_context(query, k=5, threshold=0.35, max_chars=1500):
+def build_rag_context(query, k=5, threshold=0.25, max_chars=1500):
     """Build context from retrieved chunks"""
-    ids, scores = retrieve_topk(query, k=k)
+    ids, scores = retrieve_topk(query, k=k, threshold=threshold)
     
     context_parts = []
     valid_scores = []
+    valid_ids = []
+    
+    if not ids:
+        logger.warning(f"No chunks retrieved for query: {query}")
+        return None, [], []
     
     for chunk_id, score in zip(ids, scores):
         if score < threshold:
+            logger.debug(f"Score {score:.3f} below threshold {threshold}, stopping retrieval")
             break
         
         txt = chunks[chunk_id].strip()
         context_parts.append(f"[Source {len(context_parts)+1}]\n{txt}")
         valid_scores.append(float(score))
+        valid_ids.append(int(chunk_id))
     
     if not context_parts:
-        return None, [], []
+        logger.warning(f"No chunks passed threshold for query: {query}. Returning first chunk anyway.")
+        # Fallback: use first chunk even if below threshold
+        txt = chunks[ids[0]].strip()
+        context_parts.append(f"[Source 1]\n{txt}")
+        valid_scores.append(float(scores[0]))
+        valid_ids.append(int(ids[0]))
     
     context = "\n\n---\n\n".join(context_parts)
-    return context[:max_chars], [int(i) for i in ids[:len(valid_scores)]], valid_scores
+    logger.info(f"Context built with {len(context_parts)} chunks, total {len(context)} chars")
+    return context[:max_chars], valid_ids, valid_scores
 
 def generate_rag_answer(query, k=5, max_tokens=250):
     """Generate answer using RAG + LLM"""
     if not MODEL_READY:
-        # Fallback jika model tidak ready
-        return _fallback_answer(query)
+        logger.warning(f"Model not ready, using fallback for query: {query}")
+        return _fallback_answer(query), [], []
     
     try:
         # Build context dari retrieval
-        context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.35)
+        context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.25)
         
         # Build prompt
         if context:
@@ -187,6 +207,7 @@ PERTANYAAN: {query}
 JAWABAN:"""
         
         # Generate dengan LLM
+        logger.info(f"Generating answer with context ({len(chunk_ids)} chunks) and {len(prompt)} char prompt")
         inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
         
         with torch.no_grad():
@@ -206,6 +227,7 @@ JAWABAN:"""
             skip_special_tokens=True
         ).strip()
         
+        logger.info(f"✓ Generated {len(response)} char response with {len(chunk_ids)} sources")
         return response, chunk_ids, scores
     
     except Exception as e:
@@ -286,6 +308,38 @@ def health():
         'embedder_ready': embedder is not None,
         'llm_ready': llm_model is not None
     })
+
+@app.route('/api/debug/retrieve', methods=['GET'])
+def debug_retrieve():
+    """Debug endpoint to test FAISS retrieval without LLM generation"""
+    query = request.args.get('q', 'batik').strip()
+    k = min(int(request.args.get('k', 5)), 10)
+    threshold = float(request.args.get('threshold', 0.25))
+    
+    if not embedder or not faiss_index:
+        return jsonify({'error': 'FAISS or embedder not loaded'}), 500
+    
+    try:
+        context, chunk_ids, scores = build_rag_context(query, k=k, threshold=threshold)
+        
+        retrieved_chunks = []
+        for idx, score in zip(chunk_ids, scores):
+            retrieved_chunks.append({
+                'id': int(idx),
+                'score': float(score),
+                'text': chunks[idx][:200] + '...' if len(chunks[idx]) > 200 else chunks[idx]
+            })
+        
+        return jsonify({
+            'query': query,
+            'threshold': threshold,
+            'num_retrieved': len(chunk_ids),
+            'chunks': retrieved_chunks,
+            'context_char_length': len(context) if context else 0
+        })
+    except Exception as e:
+        logger.error(f"Error in debug endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/suggestions', methods=['GET'])
 def suggestions():
