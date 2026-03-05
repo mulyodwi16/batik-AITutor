@@ -88,6 +88,8 @@ def load_artifacts():
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL    = "gpt-oss:20b"
 
+import requests as _req  # module-level import for Ollama calls
+
 def load_llm_model():
     """Check Ollama is reachable and the model is available.
     Returns (OLLAMA_MODEL, None) on success, (None, None) on failure."""
@@ -108,363 +110,149 @@ def load_llm_model():
         return None, None
 
 def build_inventory_summary(chunks_data):
-    """Build inventory summary dynamically from chunks"""
+    """Extract motif list from chunks — used only in /api/health for diagnostics."""
     try:
         import re
-        
-        # Reconstruct full text to avoid cross-chunk section boundary issues
         full_text = '\n'.join(chunks_data)
-        
-        # Find section boundaries
-        jetis_start = full_text.find('# Batik Motifs from Kampung Batik Jetis')
+        jetis_start   = full_text.find('# Batik Motifs from Kampung Batik Jetis')
         surabaya_start = full_text.find('# Batik Motifs from Surabaya')
-        
-        jetis_text = full_text[jetis_start:surabaya_start] if jetis_start != -1 and surabaya_start != -1 else ''
+        jetis_text    = full_text[jetis_start:surabaya_start] if jetis_start != -1 and surabaya_start != -1 else ''
         surabaya_text = full_text[surabaya_start:] if surabaya_start != -1 else ''
-        
-        # Match "## Name Motif" / "### Name Motif" headings; filter false positives
-        jetis_motifs = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', jetis_text)
-                        if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
-        surabaya_motifs = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', surabaya_text)
-                           if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
-        
-        # Deduplicate while preserving order
-        jetis_motifs = list(dict.fromkeys(jetis_motifs))
-        surabaya_motifs = list(dict.fromkeys(surabaya_motifs))
-        
-        inventory = {'jetis': jetis_motifs, 'surabaya': surabaya_motifs}
-        
-        # Build summary string
-        total = len(inventory['jetis']) + len(inventory['surabaya'])
-        summary = f"""Saat ini saya memiliki pengetahuan tentang {total} motif batik Indonesia:
-
-**Dari Kampung Batik Jetis, Sidoarjo ({len(inventory['jetis'])} motif):**
-"""
-        for i, motif in enumerate(inventory['jetis'], 1):
-            summary += f"{i}. {motif}\n"
-        
-        summary += f"\n**Dari Surabaya ({len(inventory['surabaya'])} motif):**\n"
-        for i, motif in enumerate(inventory['surabaya'], 1):
-            summary += f"{i}. {motif}\n"
-        
-        logger.info(f"✅ Inventory summary built: {total} motifs ({len(inventory['jetis'])} Jetis, {len(inventory['surabaya'])} Surabaya)")
-        return summary, inventory
-    
+        def _parse(text):
+            ms = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', text)
+                  if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
+            return list(dict.fromkeys(ms))
+        inv = {'jetis': _parse(jetis_text), 'surabaya': _parse(surabaya_text)}
+        total = len(inv['jetis']) + len(inv['surabaya'])
+        logger.info(f"✅ Inventory: {total} motifs ({len(inv['jetis'])} Jetis, {len(inv['surabaya'])} Surabaya)")
+        return inv
     except Exception as e:
-        logger.error(f"❌ Error building inventory summary: {e}")
-        return None, {}
+        logger.error(f"❌ build_inventory_summary: {e}")
+        return {}
 
-# Load everything at startup
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup — load all artifacts once
+# ─────────────────────────────────────────────────────────────────────────────
 chunks, faiss_index, embedder = load_artifacts()
-ollama_model_name, _ = load_llm_model()  # returns (model_name, None) — no tokenizer needed for Ollama
-
-# Reuse 'tokenizer' variable name for MODEL_READY check compatibility
-tokenizer = ollama_model_name  # truthy string = Ollama reachable, None = not reachable
-
-# Build inventory summary dynamically from chunks
-_inv_result = build_inventory_summary(chunks) if chunks else (None, {})
-inventory_summary, inventory_data = _inv_result if _inv_result else (None, {})
-
-# MODEL_READY: embedder + faiss must be loaded; Ollama model name must be set
-MODEL_READY = embedder is not None and faiss_index is not None and tokenizer is not None
-
+ollama_model_name, _ = load_llm_model()
+tokenizer    = ollama_model_name          # kept for MODEL_READY compat
+inventory_data = build_inventory_summary(chunks) if chunks else {}
+MODEL_READY  = embedder is not None and faiss_index is not None and tokenizer is not None
 logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 
 # ============================================================
-# RAG + LLM FUNCTIONS
+# RAG + LLM FUNCTIONS  (pure pipeline — no keyword rules)
 # ============================================================
 
-def retrieve_topk(query, k=5, threshold=0.25):
-    """Retrieve top-k relevant chunks using FAISS"""
+# System prompt used for every query — the LLM handles all reasoning
+_SYSTEM_PROMPT = """You are an expert AI tutor on Indonesian batik (Batik AI-Tutor).
+Answer the user's question using ONLY the context provided.
+
+Rules:
+1. COUNT carefully — if asked how many motifs exist (overall or per location), count the distinct motif headings in the context and state the exact number.
+2. FILTER by location — if the question mentions a specific place (e.g. Surabaya, Jetis, Sidoarjo), include only motifs/information from that place.
+3. LIST completely — if asked to list or enumerate, include every relevant item from the context without skipping any.
+4. DO NOT invent information that is not in the context.
+5. If the context does not contain the answer, say: "I don't have information about that in my knowledge base."
+6. Answer in the same language the user used (Indonesian or English)."""
+
+
+def retrieve_topk(query, k=25):
+    """Embed query and return top-k chunk IDs+scores from FAISS.
+    k defaults to 25 (= all chunks) so the LLM always sees full context."""
     if not embedder or not faiss_index:
-        logger.warning(f"Embedder or FAISS index not available. Cannot retrieve for query: {query}")
         return [], []
-    
     try:
         q_emb = embedder.encode(
-            [query],
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            device="cpu",
+            [query], convert_to_numpy=True, normalize_embeddings=True, device="cpu"
         ).astype("float32")
-        
-        scores, ids = faiss_index.search(q_emb, k)
-        result_ids = ids[0].tolist()
-        result_scores = scores[0].tolist()
-        
-        logger.info(f"🔍 Retrieved top-{k} for '{query}': IDs={result_ids}, Scores={[f'{s:.3f}' for s in result_scores]}")
-        return result_ids, result_scores
+        scores, ids = faiss_index.search(q_emb, min(k, faiss_index.ntotal))
+        id_list    = ids[0].tolist()
+        score_list = scores[0].tolist()
+        logger.info(f"🔍 Retrieved {len(id_list)} chunks for: {query!r}")
+        return id_list, score_list
     except Exception as e:
-        logger.error(f"Error in retrieve_topk: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"retrieve_topk error: {e}")
         return [], []
 
-def retrieve_by_location(location):
-    """Directly return all chunk IDs that belong to a specific location.
-    Used when query mentions Surabaya/Jetis — bypasses FAISS threshold."""
-    if location == 'surabaya':
-        keywords = ['Batik Motifs from Surabaya', 'Kintir Kintiran', 'Gembili Wonokromo',
-                    'Kembang Bungur', 'Sparkling', 'Remo Suroboyoan', 'Abhi Boyo']
-    elif location == 'jetis':
-        keywords = ['Kampung Batik Jetis', 'Liris Motif', 'Alun-Alun Contong',
-                    'Burung Merak', 'Sekar Jagad', 'Parang Jabon', 'Love Putihan']
-    else:
-        return [], []
 
-    ids, scores = [], []
-    for i, chunk in enumerate(chunks):
-        if any(kw in chunk for kw in keywords):
-            ids.append(i)
-            scores.append(1.0)  # Perfect score — hand-picked
-    logger.info(f"📍 Location-based retrieval '{location}': {len(ids)} chunks → IDs {ids}")
-    return ids, scores
-
-
-def detect_location(query):
-    """Return 'surabaya', 'jetis', or None based on query keywords."""
-    q = query.lower()
-    if any(w in q for w in ['surabaya', 'putat', 'wonokromo', 'kintir', 'gembili',
-                             'bungur', 'sparkling', 'remo', 'abhi boyo']):
-        return 'surabaya'
-    if any(w in q for w in ['jetis', 'sidoarjo', 'liris', 'alun-alun contong',
-                             'burung merak', 'sekar jagad', 'parang jabon', 'love putihan']):
-        return 'jetis'
-    return None
-
-
-def build_rag_context(query, k=5, threshold=0.25, max_chars=4000):
-    """Build context from retrieved chunks.
-    Uses location-based retrieval when query targets a specific city/village."""
-    query_lower = query.lower()
-    location = detect_location(query)
-
-    # If query is about listing/knowing batik from a specific location, grab ALL location chunks
-    is_location_list = location and any(w in query_lower for w in [
-        'batik', 'motif', 'tell', 'list', 'show', 'what', 'which',
-        'sebutkan', 'apa saja', 'ceritakan', 'tentang', 'know', 'about'
-    ])
-
-    if is_location_list:
-        ids, scores = retrieve_by_location(location)
-    else:
-        ids, scores = retrieve_topk(query, k=k, threshold=threshold)
-
-    context_parts = []
-    valid_scores = []
-    valid_ids = []
-
-    if not ids:
-        logger.warning(f"No chunks retrieved for query: {query}")
-        return None, [], []
-
-    for chunk_id, score in zip(ids, scores):
-        if not is_location_list and score < threshold:
-            logger.debug(f"Score {score:.3f} below threshold {threshold}, stopping retrieval")
-            break
-
-        txt = chunks[chunk_id].strip()
-        context_parts.append(f"[Source {len(context_parts)+1}]\n{txt}")
-        valid_scores.append(float(score))
-        valid_ids.append(int(chunk_id))
-
-    if not context_parts:
-        logger.warning(f"No chunks passed threshold for query: {query}. Returning first chunk anyway.")
-        txt = chunks[ids[0]].strip()
-        context_parts.append(f"[Source 1]\n{txt}")
-        valid_scores.append(float(scores[0]))
-        valid_ids.append(int(ids[0]))
-
-    context = "\n\n---\n\n".join(context_parts)
-    logger.info(f"Context built with {len(context_parts)} chunks, total {len(context)} chars")
-    return context[:max_chars], valid_ids, valid_scores
-
-def generate_rag_answer(query, k=10, max_tokens=200):
-    """Generate answer using RAG + LLM with synthesis (not raw chunks)"""
+def generate_rag_answer(query):
+    """Pure RAG pipeline: embed → retrieve ALL chunks → LLM → answer.
+    No keyword-based routing; the LLM (gpt-oss:20b) handles all reasoning."""
     if not MODEL_READY:
-        logger.warning(f"Model not ready, using fallback for query: {query}")
+        logger.warning("Model not ready — using fallback")
         return _fallback_answer(query), [], []
-    
-    # Special handling: detect inventory/total count questions (Indonesian & English)
-    query_lower = query.lower()
 
-    # --- Trigger 1: count / list words ---
-    _count_words = [
-        # Indonesian
-        'berapa', 'ada berapa', 'jumlah', 'total', 'banyak', 'apa saja',
-        'sebutkan', 'daftar', 'semua', 'seluruh',
-        # English
-        'how many', 'how much', 'total', 'count', 'number of',
-        'list', 'list all', 'show all', 'show me all', 'tell me all',
-        'what are', 'what batik', 'which are', 'which batik',
-        'enumerate', 'give me', 'name all', 'mention all',
-    ]
-    has_count = any(w in query_lower for w in _count_words)
-
-    # --- Trigger 2: batik / motif reference ---
-    _batik_words = [
-        'batik', 'motif', 'motifs', 'jenis', 'macam',
-        'type', 'types', 'kind', 'kinds', 'pattern', 'patterns',
-        'koleksi', 'collection', 'corak',
-    ]
-    has_batik = any(w in query_lower for w in _batik_words)
-
-    # --- Trigger 3: self / knowledge reference ---
-    _self_words = [
-        # Indonesian
-        'kamu', 'kau', 'anda', 'lu', 'lo', 'lo tau', 'lo tahu',
-        'tahu', 'tau', 'ketahui', 'punya', 'miliki', 'ada',
-        # English
-        'you', 'your', 'know', 'have', 'aware', 'covered', 'learned',
-    ]
-    has_self = any(w in query_lower for w in _self_words)
-
-    # --- Location detected in query ---
-    _inv_location = detect_location(query_lower)
-
-    # Inventory question = (count/list word) AND (batik ref OR location detected)
-    # Self-reference is optional — user may not always say "you know"
-    is_inventory_question = has_count and (has_batik or _inv_location is not None)
-    if is_inventory_question:
-        if inventory_summary:
-            # Check if asking about a specific location
-            if _inv_location == 'surabaya' and inventory_data.get('surabaya'):
-                motifs = inventory_data['surabaya']
-                loc_summary = f"I know {len(motifs)} batik motifs from Surabaya:\n"
-                for i, m in enumerate(motifs, 1):
-                    loc_summary += f"{i}. {m}\n"
-                logger.info(f"Answered location inventory: surabaya ({len(motifs)} motifs)")
-                return loc_summary, [], []
-            elif _inv_location == 'jetis' and inventory_data.get('jetis'):
-                motifs = inventory_data['jetis']
-                loc_summary = f"I know {len(motifs)} batik motifs from Kampung Batik Jetis, Sidoarjo:\n"
-                for i, m in enumerate(motifs, 1):
-                    loc_summary += f"{i}. {m}\n"
-                logger.info(f"Answered location inventory: jetis ({len(motifs)} motifs)")
-                return loc_summary, [], []
-            else:
-                logger.info("Answered inventory question with full dynamic summary")
-                return inventory_summary, [], []
-        else:
-            logger.warning("Inventory summary not available, using fallback")
-            return _fallback_answer(query), [], []
-    
     try:
-        # Detect if this is a counting/enumeration question (Indonesian & English)
-        is_counting_question = any(word in query.lower() for word in [
-            'berapa', 'sebutkan', 'apa saja', 'jumlah', 'jenis', 'macam',  # Indonesian
-            'how many', 'list', 'what are', 'enumerate', 'types of', 'kinds of'  # English
-        ])
-        
-        # For counting questions, use enough chunks but not too many to avoid confusion
-        effective_k = 12 if is_counting_question else k
-        
-        # Build context dari retrieval
-        logger.info(f"[Step 1] Building context for: {query!r}")
-        context, chunk_ids, scores = build_rag_context(
-            query, k=effective_k, threshold=0.25,
-            max_chars=10000 if (is_counting_question or detect_location(query)) else 4000
+        # ── 1. Retrieve ───────────────────────────────────────────────────────
+        ids, scores = retrieve_topk(query)   # get all chunks sorted by relevance
+        if not ids:
+            logger.warning("No chunks retrieved — using fallback")
+            return _fallback_answer(query), [], []
+
+        # ── 2. Build context (all retrieved chunks, no char-limit truncation) ─
+        context = "\n\n---\n\n".join(
+            f"[Source {i+1}]\n{chunks[cid].strip()}"
+            for i, cid in enumerate(ids)
         )
-        logger.info(f"[Step 2] Context ready: {len(chunk_ids)} chunks, {len(context) if context else 0} chars")
-        
-        # Build messages using standard chat format
-        system_msg = "You are an expert on Indonesian batik. Answer questions clearly and concisely based only on the provided context. Do not invent information."
-        
-        if context:
-            if is_counting_question:
-                user_msg = f"""Context about Indonesian batik:
-{context}
+        logger.info(f"Context: {len(ids)} chunks, {len(context)} chars")
 
-Question: {query}
-
-List all relevant motifs or items found in the context above. Be complete and concise."""
-            else:
-                user_msg = f"""Context about Indonesian batik:
-{context}
-
-Question: {query}
-
-Answer in 2-3 sentences using only information from the context above."""
-        else:
-            user_msg = f"""Question about Indonesian batik: {query}
-
-Answer briefly based on your knowledge of batik."""
-        
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user",   "content": user_msg},
-        ]
-        
-        # Call Ollama API (with 1 retry on empty response)
-        import requests, time
-        logger.info(f"[Step 3] Calling Ollama '{OLLAMA_MODEL}' (counting={is_counting_question}, k={effective_k}, chunks={len(chunk_ids)})")
+        # ── 3. Call Ollama ────────────────────────────────────────────────────
         payload = {
             "model": OLLAMA_MODEL,
-            "messages": messages,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {query}"},
+            ],
             "stream": False,
             "options": {
-                "temperature": 0.2,
-                "top_p": 0.5,
-                "repeat_penalty": 1.4,
-                "num_predict": 300 if is_counting_question else 200,
-                "num_ctx": 8192,  # Explicit context window size
-            }
+                "temperature":    0.1,   # low = factual, precise counting
+                "top_p":          0.9,
+                "repeat_penalty": 1.2,
+                "num_predict":    512,   # generous — model stops when done
+                "num_ctx":        16384, # large window for all 25 chunks
+            },
         }
-        
+
+        import time
         response = ""
-        for attempt in range(2):  # try up to 2 times
-            r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
+        for attempt in range(2):
+            r = _req.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
             r.raise_for_status()
             raw = r.json()["message"]["content"].strip()
-            logger.info(f"[Step 4] Ollama raw (attempt {attempt+1}, {len(raw)} chars): {raw[:150]!r}")
-            response = _clean_response(raw, is_counting=is_counting_question)
-            logger.info(f"[Step 5] After clean ({len(response)} chars): {response[:150]!r}")
+            logger.info(f"Ollama attempt {attempt+1} ({len(raw)} chars): {raw[:150]!r}")
+            response = _clean_response(raw)
             if response and len(response) >= 10:
                 break
-            logger.warning(f"Attempt {attempt+1}: response too short ({len(response)} chars), retrying...")
             time.sleep(1)
-        
+
         if not response or len(response) < 10:
-            logger.warning("Answer too short or empty, using fallback")
-            return _fallback_answer(query), chunk_ids, scores
-        
-        logger.info(f"✓ Ollama answer ({len(response)} chars) with {len(chunk_ids)} sources")
-        return response, chunk_ids, scores
-    
+            logger.warning("Empty Ollama response — fallback")
+            return _fallback_answer(query), ids, scores
+
+        logger.info(f"✓ Answer ready ({len(response)} chars, {len(ids)} sources)")
+        return response, ids, scores
+
     except Exception as e:
-        logger.error(f"Error in generate_rag_answer: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"generate_rag_answer error: {e}")
+        import traceback; logger.error(traceback.format_exc())
         return _fallback_answer(query), [], []
 
-def _clean_response(text, is_counting=False):
-    """Clean up LLM response - remove artifacts only, keep valid content.
-    Ollama (unlike TinyLlama) does NOT leak prompt instructions, so cleaning
-    should be minimal to avoid destroying legitimate answer content."""
+
+def _clean_response(text):
+    """Minimal post-processing — Ollama does not leak prompts."""
     import re
-    
     if not text:
         return text
-    
-    # Only remove model-specific special tokens (safety net)
-    text = re.sub(r'<\|[^|>]+\|>', '', text)  # <|eot_id|>, etc.
-    
-    # Remove [Source X] citation tags
-    text = re.sub(r'\[Source \d+\]', '', text)
-    
-    # Convert markdown bold to plain text
-    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    text = re.sub(r'__([^_]+)__', r'\1', text)
-    
-    # Collapse excess whitespace
+    text = re.sub(r'<\|[^|>]+\|>', '', text)       # special tokens
+    text = re.sub(r'\[Source \d+\]', '', text)       # citation tags
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # bold → plain
+    text = re.sub(r'__([^_]+)__',     r'\1', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'[ \t]+', ' ',    text)
     text = text.strip()
-    
-    # Capitalize first letter
     if text:
         text = text[0].upper() + text[1:]
-    
     return text
 
 def _fallback_answer(query):
@@ -537,6 +325,8 @@ def chat():
 @app.route('/api/health', methods=['GET'])
 def health():
     """Health check endpoint"""
+    jetis_count    = len(inventory_data.get('jetis', []))
+    surabaya_count = len(inventory_data.get('surabaya', []))
     return jsonify({
         'status': 'ok',
         'model_ready': MODEL_READY,
@@ -544,39 +334,36 @@ def health():
         'faiss_ready': faiss_index is not None,
         'embedder_ready': embedder is not None,
         'llm_ready': ollama_model_name is not None,
-        'ollama_model': ollama_model_name
+        'ollama_model': ollama_model_name,
+        'inventory': {
+            'total': jetis_count + surabaya_count,
+            'jetis': jetis_count,
+            'surabaya': surabaya_count,
+        },
     })
 
 @app.route('/api/debug/retrieve', methods=['GET'])
 def debug_retrieve():
-    """Debug endpoint to test FAISS retrieval without LLM generation"""
+    """Debug endpoint — test FAISS retrieval without LLM generation"""
     query = request.args.get('q', 'batik').strip()
-    k = min(int(request.args.get('k', 5)), 10)
-    threshold = float(request.args.get('threshold', 0.25))
-    
+    k     = min(int(request.args.get('k', 10)), 25)
+
     if not embedder or not faiss_index:
         return jsonify({'error': 'FAISS or embedder not loaded'}), 500
-    
+
     try:
-        context, chunk_ids, scores = build_rag_context(query, k=k, threshold=threshold)
-        
-        retrieved_chunks = []
-        for idx, score in zip(chunk_ids, scores):
-            retrieved_chunks.append({
-                'id': int(idx),
-                'score': float(score),
-                'text': chunks[idx][:200] + '...' if len(chunks[idx]) > 200 else chunks[idx]
-            })
-        
-        return jsonify({
-            'query': query,
-            'threshold': threshold,
-            'num_retrieved': len(chunk_ids),
-            'chunks': retrieved_chunks,
-            'context_char_length': len(context) if context else 0
-        })
+        ids, scores = retrieve_topk(query, k=k)
+        retrieved = [
+            {
+                'id':    int(cid),
+                'score': round(float(sc), 4),
+                'text':  chunks[cid][:200] + ('...' if len(chunks[cid]) > 200 else ''),
+            }
+            for cid, sc in zip(ids, scores)
+        ]
+        return jsonify({'query': query, 'num_retrieved': len(ids), 'chunks': retrieved})
     except Exception as e:
-        logger.error(f"Error in debug endpoint: {e}")
+        logger.error(f"debug_retrieve error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/suggestions', methods=['GET'])
