@@ -92,17 +92,27 @@ def load_llm_model():
         
         MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
         
+        # Detect if GPU is available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Use float32 on CPU, float16 on GPU
+        dtype = torch.float32 if device == "cpu" else torch.float16
+        
+        logger.info(f"Loading LLM on {device} with dtype={dtype}")
+        
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             device_map="auto",
-            torch_dtype=torch.float16
+            torch_dtype=dtype
         )
+        model = model.to(device)
         
-        logger.info(f"✅ LLM model loaded: {MODEL_NAME}")
+        logger.info(f"✅ LLM model loaded: {MODEL_NAME} on {device}")
         return tokenizer, model
     except Exception as e:
         logger.error(f"❌ Error loading LLM: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None, None
 
 # Load everything at startup
