@@ -148,11 +148,11 @@ def build_inventory_summary(chunks_data):
             summary += f"{i}. {motif}\n"
         
         logger.info(f"✅ Inventory summary built: {total} motifs ({len(inventory['jetis'])} Jetis, {len(inventory['surabaya'])} Surabaya)")
-        return summary
+        return summary, inventory
     
     except Exception as e:
         logger.error(f"❌ Error building inventory summary: {e}")
-        return None
+        return None, {}
 
 # Load everything at startup
 chunks, faiss_index, embedder = load_artifacts()
@@ -162,7 +162,8 @@ ollama_model_name, _ = load_llm_model()  # returns (model_name, None) — no tok
 tokenizer = ollama_model_name  # truthy string = Ollama reachable, None = not reachable
 
 # Build inventory summary dynamically from chunks
-inventory_summary = build_inventory_summary(chunks) if chunks else None
+_inv_result = build_inventory_summary(chunks) if chunks else (None, {})
+inventory_summary, inventory_data = _inv_result if _inv_result else (None, {})
 
 # MODEL_READY: embedder + faiss must be loaded; Ollama model name must be set
 MODEL_READY = embedder is not None and faiss_index is not None and tokenizer is not None
@@ -299,8 +300,25 @@ def generate_rag_answer(query, k=10, max_tokens=200):
     )
     if is_inventory_question:
         if inventory_summary:
-            logger.info("Answered inventory question with dynamic summary")
-            return inventory_summary, [], []
+            # Check if asking about a specific location
+            inv_location = detect_location(query_lower)
+            if inv_location == 'surabaya' and inventory_data.get('surabaya'):
+                motifs = inventory_data['surabaya']
+                loc_summary = f"I know {len(motifs)} batik motifs from Surabaya:\n"
+                for i, m in enumerate(motifs, 1):
+                    loc_summary += f"{i}. {m}\n"
+                logger.info(f"Answered location inventory: surabaya ({len(motifs)} motifs)")
+                return loc_summary, [], []
+            elif inv_location == 'jetis' and inventory_data.get('jetis'):
+                motifs = inventory_data['jetis']
+                loc_summary = f"I know {len(motifs)} batik motifs from Kampung Batik Jetis, Sidoarjo:\n"
+                for i, m in enumerate(motifs, 1):
+                    loc_summary += f"{i}. {m}\n"
+                logger.info(f"Answered location inventory: jetis ({len(motifs)} motifs)")
+                return loc_summary, [], []
+            else:
+                logger.info("Answered inventory question with full dynamic summary")
+                return inventory_summary, [], []
         else:
             logger.warning("Inventory summary not available, using fallback")
             return _fallback_answer(query), [], []
