@@ -125,27 +125,27 @@ def build_inventory_summary(chunks_data):
     try:
         import re
         
-        inventory = {
-            'jetis': [],
-            'surabaya': []
-        }
+        # Reconstruct full text to avoid cross-chunk section boundary issues
+        full_text = '\n'.join(chunks_data)
         
-        # Parse chunks to extract motif names and locations
-        for chunk in chunks_data:
-            chunk_lower = chunk.lower()
-            
-            # Detect location
-            location = None
-            if 'jetis' in chunk_lower or 'sidoarjo' in chunk_lower:
-                location = 'jetis'
-            elif 'surabaya' in chunk_lower or 'suroboyo' in chunk_lower:
-                location = 'surabaya'
-            
-            # Extract motif names (look for "### Motif Name" pattern)
-            motif_matches = re.findall(r'###\s+(\w+(?:\s+\w+)*?)\s+Motif', chunk)
-            for motif in motif_matches:
-                if location and motif not in inventory[location]:
-                    inventory[location].append(motif)
+        # Find section boundaries
+        jetis_start = full_text.find('# Batik Motifs from Kampung Batik Jetis')
+        surabaya_start = full_text.find('# Batik Motifs from Surabaya')
+        
+        jetis_text = full_text[jetis_start:surabaya_start] if jetis_start != -1 and surabaya_start != -1 else ''
+        surabaya_text = full_text[surabaya_start:] if surabaya_start != -1 else ''
+        
+        # Match "## Name Motif" / "### Name Motif" headings; filter false positives
+        jetis_motifs = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', jetis_text)
+                        if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
+        surabaya_motifs = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', surabaya_text)
+                           if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
+        
+        # Deduplicate while preserving order
+        jetis_motifs = list(dict.fromkeys(jetis_motifs))
+        surabaya_motifs = list(dict.fromkeys(surabaya_motifs))
+        
+        inventory = {'jetis': jetis_motifs, 'surabaya': surabaya_motifs}
         
         # Build summary string
         total = len(inventory['jetis']) + len(inventory['surabaya'])
@@ -311,10 +311,12 @@ Jawaban:"""
         with torch.no_grad():
             output = llm_model.generate(
                 **inputs,
-                max_new_tokens=250 if is_counting_question else 180,  # Slightly more for enumeration
-                temperature=0.2,  # Even lower - more focused
-                top_p=0.5,        # More deterministic
+                max_new_tokens=250 if is_counting_question else 180,
+                temperature=0.2,
+                top_p=0.5,
                 do_sample=True,
+                repetition_penalty=1.4,  # Prevent LLM from looping/repeating sentences
+                no_repeat_ngram_size=4,  # No repeated 4-gram phrases
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
             )
