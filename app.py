@@ -199,36 +199,81 @@ def retrieve_topk(query, k=5, threshold=0.25):
         logger.error(traceback.format_exc())
         return [], []
 
+def retrieve_by_location(location):
+    """Directly return all chunk IDs that belong to a specific location.
+    Used when query mentions Surabaya/Jetis — bypasses FAISS threshold."""
+    if location == 'surabaya':
+        keywords = ['Batik Motifs from Surabaya', 'Kintir Kintiran', 'Gembili Wonokromo',
+                    'Kembang Bungur', 'Sparkling', 'Remo Suroboyoan', 'Abhi Boyo']
+    elif location == 'jetis':
+        keywords = ['Kampung Batik Jetis', 'Liris Motif', 'Alun-Alun Contong',
+                    'Burung Merak', 'Sekar Jagad', 'Parang Jabon', 'Love Putihan']
+    else:
+        return [], []
+
+    ids, scores = [], []
+    for i, chunk in enumerate(chunks):
+        if any(kw in chunk for kw in keywords):
+            ids.append(i)
+            scores.append(1.0)  # Perfect score — hand-picked
+    logger.info(f"📍 Location-based retrieval '{location}': {len(ids)} chunks → IDs {ids}")
+    return ids, scores
+
+
+def detect_location(query):
+    """Return 'surabaya', 'jetis', or None based on query keywords."""
+    q = query.lower()
+    if any(w in q for w in ['surabaya', 'putat', 'wonokromo', 'kintir', 'gembili',
+                             'bungur', 'sparkling', 'remo', 'abhi boyo']):
+        return 'surabaya'
+    if any(w in q for w in ['jetis', 'sidoarjo', 'liris', 'alun-alun contong',
+                             'burung merak', 'sekar jagad', 'parang jabon', 'love putihan']):
+        return 'jetis'
+    return None
+
+
 def build_rag_context(query, k=5, threshold=0.25, max_chars=4000):
-    """Build context from retrieved chunks"""
-    ids, scores = retrieve_topk(query, k=k, threshold=threshold)
-    
+    """Build context from retrieved chunks.
+    Uses location-based retrieval when query targets a specific city/village."""
+    query_lower = query.lower()
+    location = detect_location(query)
+
+    # If query is about listing/knowing batik from a specific location, grab ALL location chunks
+    is_location_list = location and any(w in query_lower for w in [
+        'batik', 'motif', 'tell', 'list', 'show', 'what', 'which',
+        'sebutkan', 'apa saja', 'ceritakan', 'tentang', 'know', 'about'
+    ])
+
+    if is_location_list:
+        ids, scores = retrieve_by_location(location)
+    else:
+        ids, scores = retrieve_topk(query, k=k, threshold=threshold)
+
     context_parts = []
     valid_scores = []
     valid_ids = []
-    
+
     if not ids:
         logger.warning(f"No chunks retrieved for query: {query}")
         return None, [], []
-    
+
     for chunk_id, score in zip(ids, scores):
-        if score < threshold:
+        if not is_location_list and score < threshold:
             logger.debug(f"Score {score:.3f} below threshold {threshold}, stopping retrieval")
             break
-        
+
         txt = chunks[chunk_id].strip()
         context_parts.append(f"[Source {len(context_parts)+1}]\n{txt}")
         valid_scores.append(float(score))
         valid_ids.append(int(chunk_id))
-    
+
     if not context_parts:
         logger.warning(f"No chunks passed threshold for query: {query}. Returning first chunk anyway.")
-        # Fallback: use first chunk even if below threshold
         txt = chunks[ids[0]].strip()
         context_parts.append(f"[Source 1]\n{txt}")
         valid_scores.append(float(scores[0]))
         valid_ids.append(int(ids[0]))
-    
+
     context = "\n\n---\n\n".join(context_parts)
     logger.info(f"Context built with {len(context_parts)} chunks, total {len(context)} chars")
     return context[:max_chars], valid_ids, valid_scores
@@ -273,7 +318,7 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(
             query, k=effective_k, threshold=0.25,
-            max_chars=8000 if is_counting_question else 4000
+            max_chars=10000 if (is_counting_question or detect_location(query)) else 4000
         )
         
         # Build messages using standard chat format (apply_chat_template handles any model)
