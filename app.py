@@ -202,30 +202,23 @@ def generate_rag_answer(query, k=5, max_tokens=200):
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.25)
         
-        # Build prompt dengan EXPLICIT instruction untuk synthesize, bukan copy-paste
+        # Build prompt dengan CLEAR BOUNDARY antara instruction dan context
         if context:
-            prompt = f"""Anda adalah AI Tutor Batik Indonesia yang berpengalaman.
+            # Format yang lebih simple dan less likely untuk slip ke output
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Berikan jawaban singkat (1-3 kalimat) ke pertanyaan berikut menggunakan informasi dari dokumen. Jangan copy-paste, jelaskan dengan kalimat Anda sendiri.
 
-TUGAS: Jawab pertanyaan pengguna dengan menggunakan informasi dari dokumen.
-PENTING:
-- Jelaskan dengan kalimat Anda SENDIRI (jangan copy-paste dari dokumen)
-- Buat jawaban yang natural dan mudah dipahami
-- Fokus pada informasi paling relevan
-- Jawab SINGKAT dan JELAS (1-3 kalimat)
-- Gunakan Bahasa Indonesia yang baik
-
-INFORMASI DARI DOKUMEN:
+Dokumen:
 {context}
 
-PERTANYAAN: {query}
+Pertanyaan: {query}
 
-JAWABAN (dalam kalimat Anda sendiri, bukan copy-paste):"""
+Jawaban:"""
         else:
-            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dengan singkat dan jelas dalam Bahasa Indonesia.
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dengan singkat dalam Bahasa Indonesia.
 
-PERTANYAAN: {query}
+Pertanyaan: {query}
 
-JAWABAN:"""
+Jawaban:"""
         
         # Generate dengan LLM - Lower temperature untuk jawaban lebih grounded
         logger.info(f"Generating synthesized answer with context ({len(chunk_ids)} chunks)")
@@ -270,24 +263,54 @@ JAWABAN:"""
         return _fallback_answer(query), [], []
 
 def _clean_response(text):
-    """Clean up LLM response - remove artifacts, extra whitespace, format properly"""
-    # Remove [Source X] tags jika ada
+    """Clean up LLM response - remove artifacts, instructions, extra whitespace"""
     import re
+    
+    # Remove instruction text that might slip through
+    text = re.sub(r'PENTING:.*?(?=\n|\Z)', '', text, flags=re.DOTALL)
+    text = re.sub(r'INFORMASI DARI DOKUMEN.*?(?=\Z)', '', text, flags=re.DOTALL)
+    text = re.sub(r'PERTANYAAN:.*?(?=\Z)', '', text, flags=re.DOTALL)
+    text = re.sub(r'JAWABAN.*?:', '', text, flags=re.DOTALL)
+    text = re.sub(r'jangan.*?copy-paste', '', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'(jelaskan|gunakan|buat|fokus).*?(?=\n|\Z)', '', text, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Remove [Source X] tags
     text = re.sub(r'\[Source \d+\]', '', text)
     text = re.sub(r'\[source \d+\]', '', text)
+    
+    # Remove markdown
+    text = re.sub(r'\*\*', '', text)
+    text = re.sub(r'###+', '', text)
+    text = re.sub(r'__+', '', text)
+    
+    # Remove bullet points and dashes at start of lines
+    text = re.sub(r'^\s*[-•*]\s+', '', text, flags=re.MULTILINE)
+    
+    # Clean double dashes/lines
+    text = re.sub(r'\s*-{2,}\s*', ' ', text)
     
     # Remove excess whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     
-    # Remove markdown artifacts
-    text = re.sub(r'\*\*', '', text)
-    text = re.sub(r'###+', '', text)
+    # Fix sentence fragments - ensure proper punctuation
+    sentences = text.split('.')
+    cleaned = []
+    for s in sentences:
+        s = s.strip()
+        if s and len(s) > 5:  # Skip very short fragments
+            # Skip if it looks like instructions
+            if not any(kw in s.lower() for kw in ['penting', 'instruksi', 'tugas', 'gunakan', 'jangan']):
+                cleaned.append(s)
+    
+    text = '. '.join(cleaned)
+    if text and not text.endswith('.'):
+        text += '.'
     
     # Capitalize first letter
     if text:
         text = text[0].upper() + text[1:]
     
-    return text
+    return text.strip()
 
 def _fallback_answer(query):
     """Fallback answer jika LLM tidak ready"""
