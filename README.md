@@ -7,8 +7,8 @@ Chatbot pendidikan interaktif dengan **RAG (Retrieval Augmented Generation) + LL
 ### 🤖 RAG + LLM Pipeline
 - **Semantic Search**: FAISS indexing untuk fast similarity search (cosine distance)
 - **Retrieval**: Top-k relevant chunks dari knowledge base
-- **LLM Generation**: TinyLlama 1.1B untuk generate context-aware answers
-- **Smart Fallback**: Rule-based responses jika LLM tidak tersedia
+- **LLM Generation**: Ollama GPT 20B untuk generate context-aware answers
+- **Smart Fallback**: Rule-based responses jika Ollama tidak tersedia
 
 ### 💬 Chat Interface
 - Real-time chatbot dengan streaming responses
@@ -33,9 +33,9 @@ FAISS Index Search (top-k retrieval)
     ↓
 Build Context (chunks + scores)
     ↓
-LLM Prompt Engineering
+Ollama API Call
     ↓
-TinyLlama 1.1B Generation
+✨ GPT 20B Generation ✨
     ↓
 Response + Metadata
 ```
@@ -43,15 +43,30 @@ Response + Metadata
 ## 📋 Persyaratan
 
 - Python 3.9+
+- **Ollama** (untuk LLM inference) - download dari [ollama.ai](https://ollama.ai)
+- **Model**: gpt-oss:20b (jalankan `ollama pull gpt-oss:20b`)
 - CUDA-compatible GPU (recommended) atau CPU (slower)
-- 3-4GB RAM untuk model inference
+- 4GB+ RAM untuk Ollama inference
 - Docker & Docker Compose (untuk deployment)
 
 ## 🚀 Quick Start (⚡ Penting!)
 
-### Prerequisites: Generate Artifacts First
+### Prerequisites: Setup Ollama + Generate Artifacts
 
-Knowledge base artifacts **harus di-generate** sebelum menjalankan chatbot:
+#### 1️⃣ Setup Ollama
+```bash
+# Download & install Ollama dari https://ollama.ai
+# Jalankan Ollama service (akan run di localhost:11434)
+ollama serve
+
+# Di terminal baru, pull model GPT 20B
+ollama pull gpt-oss:20b
+
+# Verifikasi model berhasil diunduh
+ollama list
+```
+
+#### 2️⃣ Generate Knowledge Base Artifacts
 
 **Option A: Pakai helper script (Recommended)**
 ```bash
@@ -76,22 +91,33 @@ python setup-artifacts.py
 
 ### Opsi 1: Lokal (tanpa Docker)
 
-1. **Install dependencies:**
+1. **Setup Ollama** (lihat prerequisites di atas)
+
+2. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-2. **Generate artifacts** (jika belum):
+3. **Generate artifacts** (jika belum):
 ```bash
 python setup-artifacts.py
 ```
 
-3. **Jalankan aplikasi:**
+4. **Pastikan Ollama service berjalan:**
+```bash
+# Terminal 1: Jalankan Ollama server
+ollama serve
+
+# Terminal 2 atau baru: Check apakah Ollama siap
+curl http://localhost:11434/api/tags
+```
+
+5. **Jalankan aplikasi Flask di terminal baru:**
 ```bash
 python app.py
 ```
 
-4. **Akses di browser:**
+6. **Akses di browser:**
 ```
 http://localhost:5000
 ```
@@ -101,23 +127,27 @@ http://localhost:5000
 curl http://localhost:5000/api/health
 ```
 
-
-
 ### Opsi 2: Docker Compose (Recommended)
 
-**IMPORTANT: Setup artifacts first!**
+**IMPORTANT: Setup Ollama & artifacts first!**
 
 ```bash
-# 1. Install base dependencies
+# 1. Setup Ollama dengan model GPT 20B (lihat Prerequisites)
+ollama pull gpt-oss:20b
+
+# 2. Install base dependencies
 pip install sentence-transformers faiss-cpu numpy
 
-# 2. Generate artifacts (creates artifacts/ folder)
+# 3. Generate artifacts (creates artifacts/ folder)
 python setup-artifacts.py
 
-# 3. Build & run Docker
+# 4. Jalankan Ollama service di terminal terpisah
+ollama serve
+
+# 5. Build & run Docker Compose di terminal baru
 docker-compose up --build
 
-# 4. Akses di browser
+# 6. Akses di browser
 # http://localhost:5000
 ```
 
@@ -125,6 +155,8 @@ docker-compose up --build
 ```bash
 docker-compose down
 ```
+
+**Note:** Docker container akan terhubung ke Ollama pada `http://localhost:11434` (host machine)
 
 ---
 
@@ -211,11 +243,12 @@ AI-Tutor/
 
 ### LLM Model
 - **Name**: `TinyLlama-1.1B-Chat-v1.0`
-- **Parameters**: 1.1 Billion
-- **Language**: Bahasa Indonesia (fine-tuned)
-- **Memory**: ~2.2GB (float16)
-- **Speed**: ~30-40 tokens/sec on CPU
-
+- **Parameter (Ollama)
+- **Name**: `gpt-oss:20b` (GPT Open Source)
+- **Parameters**: 20 Billion
+- **Backend**: Ollama (Local Inference)
+- **URL**: `http://localhost:11434`
+- **Memory**: 8-16GB (recommend GPU for fast inference
 ### FAISS Index
 - **Type**: IndexFlatIP (cosine similarity)
 - **Complexity**: O(n) search, O(1) for fixed k
