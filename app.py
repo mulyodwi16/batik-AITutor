@@ -192,20 +192,38 @@ def build_rag_context(query, k=5, threshold=0.25, max_chars=1500):
     logger.info(f"Context built with {len(context_parts)} chunks, total {len(context)} chars")
     return context[:max_chars], valid_ids, valid_scores
 
-def generate_rag_answer(query, k=5, max_tokens=200):
+def generate_rag_answer(query, k=10, max_tokens=200):
     """Generate answer using RAG + LLM with synthesis (not raw chunks)"""
     if not MODEL_READY:
         logger.warning(f"Model not ready, using fallback for query: {query}")
         return _fallback_answer(query), [], []
     
     try:
-        # Build context dari retrieval
-        context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.25)
+        # Detect if this is a counting/enumeration question
+        is_counting_question = any(word in query.lower() for word in ['berapa', 'berapa banyak', 'sebutkan', 'apa saja', 'ada berapa', 'jumlah', 'jenis'])
         
-        # Build prompt dengan CLEAR BOUNDARY antara instruction dan context
+        # For counting questions, retrieve MORE chunks
+        effective_k = 15 if is_counting_question else k
+        
+        # Build context dari retrieval
+        context, chunk_ids, scores = build_rag_context(query, k=effective_k, threshold=0.25)
+        
+        # Build prompt dengan handling khusus untuk berbagai tipe pertanyaan
         if context:
-            # Format yang lebih simple dan less likely untuk slip ke output
-            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Berikan jawaban singkat (1-3 kalimat) ke pertanyaan berikut menggunakan informasi dari dokumen. Jangan copy-paste, jelaskan dengan kalimat Anda sendiri.
+            # For counting/enumeration questions, be more explicit
+            if is_counting_question:
+                prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dengan membaca SELURUH informasi di dokumen.
+
+Untuk pertanyaan yang menanyakan jumlah, jenis, atau sebutkan: JELASKAN LENGKAP dengan menyebutkan semua item/jenis yang Anda found di dokumen. Gunakan kalimat Anda sendiri, bukan copy-paste.
+
+Dokumen:
+{context}
+
+Pertanyaan: {query}
+
+Jawaban (sebutkan semua yang relevan):"""
+            else:
+                prompt = f"""Anda adalah AI Tutor Batik Indonesia. Berikan jawaban singkat (1-3 kalimat) ke pertanyaan berikut menggunakan informasi dari dokumen. Jelaskan dengan kalimat Anda sendiri.
 
 Dokumen:
 {context}
@@ -220,16 +238,16 @@ Pertanyaan: {query}
 
 Jawaban:"""
         
-        # Generate dengan LLM - Lower temperature untuk jawaban lebih grounded
-        logger.info(f"Generating synthesized answer with context ({len(chunk_ids)} chunks)")
+        # Generate dengan LLM
+        logger.info(f"Generating answer (counting={is_counting_question}, k={effective_k}) with context ({len(chunk_ids)} chunks)")
         inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
         
         with torch.no_grad():
             output = llm_model.generate(
                 **inputs,
-                max_new_tokens=max_tokens,
-                temperature=0.25,  # EVEN LOWER - lebih fokus pada synthesis
-                top_p=0.6,         # LOWER - lebih deterministic
+                max_new_tokens=max_tokens if not is_counting_question else 300,  # MORE tokens untuk counting
+                temperature=0.25,
+                top_p=0.6,
                 do_sample=True,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
@@ -241,7 +259,7 @@ Jawaban:"""
             skip_special_tokens=True
         ).strip()
         
-        # Clean up response - remove extra [Source tags if present, clean formatting
+        # Clean up response
         response = _clean_response(response)
         
         # Validate answer is not just raw chunk (sanity check)
@@ -349,8 +367,8 @@ def chat():
                 'model': 'empty'
             })
         
-        # Generate answer dengan RAG + LLM
-        answer, chunk_ids, scores = generate_rag_answer(user_message, k=5, max_tokens=200)
+        # Generate answer dengan RAG + LLM (uses default k=10, with auto-detection for counting questions)
+        answer, chunk_ids, scores = generate_rag_answer(user_message)
         
         # Prepare metadata
         metadata = {
