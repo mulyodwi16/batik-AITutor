@@ -7,6 +7,12 @@ from datetime import datetime
 import torch
 import logging
 
+# ============================================================
+# DISABLE CUDA TO AVOID GPU COMPATIBILITY ISSUES
+# ============================================================
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+torch.cuda.is_available = lambda: False
+
 app = Flask(__name__)
 CORS(app)
 
@@ -92,17 +98,16 @@ def load_llm_model():
         
         MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
         
-        # Detect if GPU is available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        # Use float32 on CPU, float16 on GPU
-        dtype = torch.float32 if device == "cpu" else torch.float16
+        # Force CPU mode (CUDA disabled at top of file)
+        device = "cpu"
+        dtype = torch.float32
         
         logger.info(f"Loading LLM on {device} with dtype={dtype}")
         
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
-            device_map="auto",
+            device_map={"": device},
             torch_dtype=dtype
         )
         model = model.to(device)
