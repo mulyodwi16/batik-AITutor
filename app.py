@@ -7,12 +7,6 @@ from datetime import datetime
 import torch
 import logging
 
-# ============================================================
-# DISABLE CUDA TO AVOID GPU COMPATIBILITY ISSUES
-# ============================================================
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
-torch.cuda.is_available = lambda: False
-
 app = Flask(__name__)
 CORS(app)
 
@@ -72,8 +66,9 @@ def load_artifacts():
         
         # Load embedder model
         try:
-            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            logger.info("✅ Embedder model loaded successfully")
+            embed_device = "cuda" if torch.cuda.is_available() else "cpu"
+            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=embed_device)
+            logger.info(f"✅ Embedder model loaded successfully on {embed_device}")
         except Exception as e:
             logger.error(f"❌ Error loading embedder: {e}")
             logger.warning("⚠️  Will use LLM-only mode without semantic search")
@@ -92,27 +87,30 @@ def load_artifacts():
         return [], None, None
 
 def load_llm_model():
-    """Load LLM model (Llama-3.2-3B-Instruct)"""
+    """Load LLM model (TinyLlama on GPU if available)"""
     try:
         from transformers import AutoTokenizer, AutoModelForCausalLM
         
-        MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+        MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
         
-        # Force CPU mode (CUDA disabled at top of file)
-        device = "cpu"
-        dtype = torch.float32
+        # Auto-detect GPU; fall back to CPU
+        if torch.cuda.is_available():
+            device = "cuda"
+            dtype = torch.float16  # float16 is fine on GPU
+            logger.info(f"🚀 GPU detected: {torch.cuda.get_device_name(0)} — loading model on GPU")
+        else:
+            device = "cpu"
+            dtype = torch.float32  # float32 required on CPU
+            logger.info("⚠️  No GPU detected — loading model on CPU")
         
-        logger.info(f"Loading LLM on {device} with dtype={dtype}")
-        logger.info(f"Model: {MODEL_NAME} (requires HuggingFace login with accepted license)")
+        logger.info(f"Loading {MODEL_NAME} on {device} with dtype={dtype}")
         
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
-            device_map={"": device},
+            device_map="auto",
             torch_dtype=dtype,
-            low_cpu_mem_usage=True,
         )
-        model = model.to(device)
         
         logger.info(f"✅ LLM model loaded: {MODEL_NAME} on {device}")
         return tokenizer, model
