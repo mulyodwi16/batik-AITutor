@@ -177,25 +177,35 @@ def retrieve_topk(query, k=25):
 
 
 def generate_rag_answer(query):
-    """Pure RAG pipeline: embed → retrieve ALL chunks → LLM → answer.
+    """Pure RAG pipeline: embed → retrieve → LLM → answer.
     No keyword-based routing; the LLM (gpt-oss:20b) handles all reasoning."""
     if not MODEL_READY:
         logger.warning("Model not ready — using fallback")
         return _fallback_answer(query), [], []
 
     try:
-        # ── 1. Retrieve ───────────────────────────────────────────────────────
-        ids, scores = retrieve_topk(query)   # get all chunks sorted by relevance
+        # ── 1. Retrieve top-25 chunks sorted by relevance ─────────────────────
+        ids, scores = retrieve_topk(query)
         if not ids:
             logger.warning("No chunks retrieved — using fallback")
             return _fallback_answer(query), [], []
 
-        # ── 2. Build context (all retrieved chunks, no char-limit truncation) ─
-        context = "\n\n---\n\n".join(
-            f"[Source {i+1}]\n{chunks[cid].strip()}"
-            for i, cid in enumerate(ids)
-        )
-        logger.info(f"Context: {len(ids)} chunks, {len(context)} chars")
+        # ── 2. Build context — cap at 12 000 chars so Ollama stays within its
+        #       context window (gpt-oss:20b handles ~8 192 tokens ≈ 30 000 chars
+        #       but empirically starts failing above ~12 000 chars of context).
+        MAX_CONTEXT_CHARS = 12_000
+        parts = []
+        total_chars = 0
+        for i, cid in enumerate(ids):
+            chunk_text = chunks[cid].strip()
+            entry = f"[Source {i+1}]\n{chunk_text}"
+            if total_chars + len(entry) > MAX_CONTEXT_CHARS:
+                break
+            parts.append(entry)
+            total_chars += len(entry)
+
+        context = "\n\n---\n\n".join(parts)
+        logger.info(f"Context: {len(parts)}/{len(ids)} chunks, {len(context)} chars")
 
         # ── 3. Call Ollama ────────────────────────────────────────────────────
         payload = {
@@ -206,11 +216,11 @@ def generate_rag_answer(query):
             ],
             "stream": False,
             "options": {
-                "temperature":    0.1,   # low = factual, precise counting
+                "temperature":    0.1,
                 "top_p":          0.9,
                 "repeat_penalty": 1.2,
-                "num_predict":    512,   # generous — model stops when done
-                "num_ctx":        16384, # large window for all 25 chunks
+                "num_predict":    512,
+                "num_ctx":        8192,
             },
         }
 
@@ -230,8 +240,8 @@ def generate_rag_answer(query):
             logger.warning("Empty Ollama response — fallback")
             return _fallback_answer(query), ids, scores
 
-        logger.info(f"✓ Answer ready ({len(response)} chars, {len(ids)} sources)")
-        return response, ids, scores
+        logger.info(f"✓ Answer ready ({len(response)} chars, {len(parts)} sources)")
+        return response, ids[:len(parts)], scores[:len(parts)]
 
     except Exception as e:
         logger.error(f"generate_rag_answer error: {e}")
