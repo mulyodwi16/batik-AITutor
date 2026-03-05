@@ -452,7 +452,8 @@ def health():
         'chunks_loaded': len(chunks),
         'faiss_ready': faiss_index is not None,
         'embedder_ready': embedder is not None,
-        'llm_ready': llm_model is not None
+        'llm_ready': ollama_model_name is not None,
+        'ollama_model': ollama_model_name
     })
 
 @app.route('/api/debug/retrieve', methods=['GET'])
@@ -512,7 +513,7 @@ if __name__ == '__main__':
     print(f"✅ Chunks loaded: {len(chunks)}")
     print(f"✅ FAISS index: {'Ready' if faiss_index else 'Not found'}")
     print(f"✅ Embedder model: {'Loaded' if embedder else 'Failed'}")
-    print(f"✅ LLM model: {'Loaded' if llm_model else 'Failed (using fallback)'}")
+    print(f"✅ Ollama model: {ollama_model_name if ollama_model_name else 'Not reachable (using fallback)'}")
     print(f"✅ Model status: {'🟢 FULL RAG+LLM' if MODEL_READY else '🟡 FALLBACK MODE'}")
     print("\n📍 Starting server on http://0.0.0.0:5000")
     print("="*80 + "\n")
