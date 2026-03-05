@@ -316,12 +316,14 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         effective_k = 12 if is_counting_question else k
         
         # Build context dari retrieval
+        logger.info(f"[Step 1] Building context for: {query!r}")
         context, chunk_ids, scores = build_rag_context(
             query, k=effective_k, threshold=0.25,
             max_chars=10000 if (is_counting_question or detect_location(query)) else 4000
         )
+        logger.info(f"[Step 2] Context ready: {len(chunk_ids)} chunks, {len(context) if context else 0} chars")
         
-        # Build messages using standard chat format (apply_chat_template handles any model)
+        # Build messages using standard chat format
         system_msg = "You are an expert on Indonesian batik. Answer questions clearly and concisely based only on the provided context. Do not invent information."
         
         if context:
@@ -351,7 +353,7 @@ Answer briefly based on your knowledge of batik."""
         
         # Call Ollama API (with 1 retry on empty response)
         import requests, time
-        logger.info(f"Calling Ollama '{OLLAMA_MODEL}' (counting={is_counting_question}, k={effective_k}, chunks={len(chunk_ids)})")
+        logger.info(f"[Step 3] Calling Ollama '{OLLAMA_MODEL}' (counting={is_counting_question}, k={effective_k}, chunks={len(chunk_ids)})")
         payload = {
             "model": OLLAMA_MODEL,
             "messages": messages,
@@ -361,6 +363,7 @@ Answer briefly based on your knowledge of batik."""
                 "top_p": 0.5,
                 "repeat_penalty": 1.4,
                 "num_predict": 300 if is_counting_question else 200,
+                "num_ctx": 8192,  # Explicit context window size
             }
         }
         
@@ -369,8 +372,9 @@ Answer briefly based on your knowledge of batik."""
             r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
             r.raise_for_status()
             raw = r.json()["message"]["content"].strip()
-            logger.info(f"Ollama raw response (attempt {attempt+1}): {raw[:120]!r}")
+            logger.info(f"[Step 4] Ollama raw (attempt {attempt+1}, {len(raw)} chars): {raw[:150]!r}")
             response = _clean_response(raw, is_counting=is_counting_question)
+            logger.info(f"[Step 5] After clean ({len(response)} chars): {response[:150]!r}")
             if response and len(response) >= 10:
                 break
             logger.warning(f"Attempt {attempt+1}: response too short ({len(response)} chars), retrying...")
@@ -390,51 +394,28 @@ Answer briefly based on your knowledge of batik."""
         return _fallback_answer(query), [], []
 
 def _clean_response(text, is_counting=False):
-    """Clean up LLM response - remove artifacts, instructions, repetition"""
+    """Clean up LLM response - remove artifacts only, keep valid content.
+    Ollama (unlike TinyLlama) does NOT leak prompt instructions, so cleaning
+    should be minimal to avoid destroying legitimate answer content."""
     import re
     
-    # Remove prompt leakage patterns (any model special tokens)
-    text = re.sub(r'<\|[^|>]+\|>', '', text)  # <|eot_id|>, <|start_header_id|>, etc.
-    text = re.sub(r'<\|system\|>.*?<\|assistant\|>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<\|user\|>.*', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'Context about.*?Question:', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'Answer in \d[-\w\s]+sentences.*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'List all relevant.*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'Question:.*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'Answer:', '', text, flags=re.IGNORECASE)
+    if not text:
+        return text
     
-    # Remove [Source X] tags
+    # Only remove model-specific special tokens (safety net)
+    text = re.sub(r'<\|[^|>]+\|>', '', text)  # <|eot_id|>, etc.
+    
+    # Remove [Source X] citation tags
     text = re.sub(r'\[Source \d+\]', '', text)
     
-    # Remove markdown headers
-    text = re.sub(r'#{2,}\s+', '', text)
-    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **bold** → bold
+    # Convert markdown bold to plain text
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
     
-    # Remove bullet points at start of lines (optional: keep for counting)
-    if not is_counting:
-        text = re.sub(r'^\s*[-•*]\s+', '', text, flags=re.MULTILINE)
-    
-    # For counting questions - remove repetitive lines aggressively
-    if is_counting:
-        lines = text.split('\n')
-        seen_lines = set()
-        unique_lines = []
-        for line in lines:
-            line = line.strip()
-            norm_line = re.sub(r'\s+', ' ', line).lower()
-            if line and norm_line not in seen_lines and len(line) > 3:
-                seen_lines.add(norm_line)
-                unique_lines.append(line)
-        text = '\n'.join(unique_lines)
-    
-    # Collapse whitespace
+    # Collapse excess whitespace
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'[ \t]+', ' ', text)
     text = text.strip()
-    
-    # Remove obvious word-level repetition (3+ same word in a row)
-    text = re.sub(r'(\b\w+\b)( \1){2,}', r'\1', text)
     
     # Capitalize first letter
     if text:
