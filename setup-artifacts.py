@@ -82,8 +82,13 @@ def main():
     print(f"   ✓ Created {len(chunks)} chunks")
     
     # Generate embeddings
-    print("\n🧠 Generating embeddings...")
+    print("\n🧠 Generating embeddings (using CPU)...")
     try:
+        import torch
+        # Force CPU mode to avoid CUDA compatibility issues
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        torch.cuda.is_available = lambda: False
+        
         from sentence_transformers import SentenceTransformer
         
         embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -94,9 +99,13 @@ def main():
             normalize_embeddings=True
         ).astype("float32")
         print(f"   ✓ Generated embeddings: {embeddings.shape}")
-    except ImportError:
-        print("   ❌ sentence-transformers not found. Installing...")
-        os.system(f"{sys.executable} -m pip install sentence-transformers")
+    except ImportError as e:
+        print(f"   ❌ Import error: {e}")
+        print("   Installing sentence-transformers...")
+        os.system(f"{sys.executable} -m pip install sentence-transformers torch")
+        import torch
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        torch.cuda.is_available = lambda: False
         from sentence_transformers import SentenceTransformer
         embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         embeddings = embedder.encode(
@@ -106,9 +115,48 @@ def main():
             normalize_embeddings=True
         ).astype("float32")
         print(f"   ✓ Generated embeddings: {embeddings.shape}")
+    except RuntimeError as e:
+        if "CUDA" in str(e):
+            print(f"   ⚠️  CUDA error detected: {str(e)[:100]}")
+            print("   Retrying with CPU only...")
+            import torch
+            os.environ['CUDA_VISIBLE_DEVICES'] = ''
+            torch.cuda.is_available = lambda: False
+            # Clear torch cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            from sentence_transformers import SentenceTransformer
+            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device='cpu')
+            embeddings = embedder.encode(
+                chunks,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                device='cpu'
+            ).astype("float32")
+            print(f"   ✓ Generated embeddings on CPU: {embeddings.shape}")
+        else:
+            print(f"   ❌ Error: {e}")
+            sys.exit(1)
     except Exception as e:
-        print(f"   ❌ Error: {e}")
-        sys.exit(1)
+        print(f"   ❌ Unexpected error: {e}")
+        print("   Retrying with explicit CPU device...")
+        try:
+            import torch
+            torch.cuda.is_available = lambda: False
+            from sentence_transformers import SentenceTransformer
+            embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device='cpu')
+            embeddings = embedder.encode(
+                chunks,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                device='cpu'
+            ).astype("float32")
+            print(f"   ✓ Generated embeddings on CPU: {embeddings.shape}")
+        except Exception as e2:
+            print(f"   ❌ Failed: {e2}")
+            sys.exit(1)
     
     # Build FAISS index
     print("\n🔍 Building FAISS index...")
