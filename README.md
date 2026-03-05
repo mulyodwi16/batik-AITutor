@@ -47,6 +47,31 @@ Response + Metadata
 - 3-4GB RAM untuk model inference
 - Docker & Docker Compose (untuk deployment)
 
+## 🚀 Quick Start (⚡ Penting!)
+
+### Prerequisites: Generate Artifacts First
+
+Knowledge base artifacts **harus di-generate** sebelum menjalankan chatbot:
+
+**Option A: Pakai helper script (Recommended)**
+```bash
+# 1. Install dependencies
+pip install sentence-transformers faiss-cpu numpy
+
+# 2. Generate artifacts dari learn-batikindonesia.md
+python setup-artifacts.py
+
+# Output: artifacts/chunks.json, embeddings.npy, faiss.index
+```
+
+**Option B: Dari Jupyter Notebook**
+```bash
+# Run AI_Tutor.ipynb TAHAP 1 & 2 cells untuk generate artifacts
+# Copy artifacts/ folder ke project directory
+```
+
+---
+
 ## 🚀 Cara Menjalankan
 
 ### Opsi 1: Lokal (tanpa Docker)
@@ -56,12 +81,9 @@ Response + Metadata
 pip install -r requirements.txt
 ```
 
-2. **Ensure artifacts exist** (FAISS index, chunks, embeddings):
+2. **Generate artifacts** (jika belum):
 ```bash
-# artifacts/ folder harus berisi:
-# - chunks.json
-# - embeddings.npy
-# - faiss.index
+python setup-artifacts.py
 ```
 
 3. **Jalankan aplikasi:**
@@ -74,22 +96,37 @@ python app.py
 http://localhost:5000
 ```
 
+**Health check:**
+```bash
+curl http://localhost:5000/api/health
+```
+
+
+
 ### Opsi 2: Docker Compose (Recommended)
 
-1. **Build dan jalankan:**
+**IMPORTANT: Setup artifacts first!**
+
 ```bash
+# 1. Install base dependencies
+pip install sentence-transformers faiss-cpu numpy
+
+# 2. Generate artifacts (creates artifacts/ folder)
+python setup-artifacts.py
+
+# 3. Build & run Docker
 docker-compose up --build
+
+# 4. Akses di browser
+# http://localhost:5000
 ```
 
-2. **Akses di browser:**
-```
-http://localhost:5000
-```
-
-3. **Untuk stop:**
+**Untuk stop:**
 ```bash
 docker-compose down
 ```
+
+---
 
 ## 🔍 API Endpoints
 
