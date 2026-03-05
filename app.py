@@ -192,7 +192,7 @@ def build_rag_context(query, k=5, threshold=0.25, max_chars=1500):
     logger.info(f"Context built with {len(context_parts)} chunks, total {len(context)} chars")
     return context[:max_chars], valid_ids, valid_scores
 
-def generate_rag_answer(query, k=5, max_tokens=250):
+def generate_rag_answer(query, k=5, max_tokens=200):
     """Generate answer using RAG + LLM"""
     if not MODEL_READY:
         logger.warning(f"Model not ready, using fallback for query: {query}")
@@ -202,35 +202,35 @@ def generate_rag_answer(query, k=5, max_tokens=250):
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.25)
         
-        # Build prompt
+        # Build prompt dengan instruction yang lebih ketat
         if context:
-            prompt = f"""Kamu adalah AI Tutor batik Indonesia yang membantu dalam pembelajaran.
-Jawab pertanyaan berikut dengan jelas dan singkat dalam Bahasa Indonesia.
-Gunakan informasi dari dokumen di bawah jika relevan.
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan pengguna dengan jelas, singkat, dan hanya berdasarkan informasi di dokumen.
+Jika informasi tidak ada di dokumen, katakan "Informasi tidak tersedia".
+Jangan menambahkan informasi di luar dokumen.
 
 INFORMASI DOKUMEN:
 {context}
 
 PERTANYAAN: {query}
 
-JAWABAN:"""
+JAWABAN (singkat, jelas, berdasarkan dokumen):"""
         else:
-            prompt = f"""Kamu adalah AI Tutor batik Indonesia. Jawab pertanyaan berikut dalam Bahasa Indonesia.
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dalam Bahasa Indonesia dengan singkat.
 
 PERTANYAAN: {query}
 
 JAWABAN:"""
         
-        # Generate dengan LLM
-        logger.info(f"Generating answer with context ({len(chunk_ids)} chunks) and {len(prompt)} char prompt")
+        # Generate dengan LLM - Lower temperature untuk jawaban lebih grounded
+        logger.info(f"Generating answer with context ({len(chunk_ids)} chunks)")
         inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
         
         with torch.no_grad():
             output = llm_model.generate(
                 **inputs,
                 max_new_tokens=max_tokens,
-                temperature=0.7,
-                top_p=0.9,
+                temperature=0.3,  # LOWERED from 0.7 - more deterministic
+                top_p=0.7,        # LOWERED from 0.9 - more focused
                 do_sample=True,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
@@ -242,11 +242,17 @@ JAWABAN:"""
             skip_special_tokens=True
         ).strip()
         
+        # Clean up to prevent memory leak
+        del inputs, output
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
         logger.info(f"✓ Generated {len(response)} char response with {len(chunk_ids)} sources")
         return response, chunk_ids, scores
     
     except Exception as e:
         logger.error(f"Error in generate_rag_answer: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return _fallback_answer(query), [], []
 
 def _fallback_answer(query):
@@ -287,7 +293,7 @@ def chat():
             })
         
         # Generate answer dengan RAG + LLM
-        answer, chunk_ids, scores = generate_rag_answer(user_message, k=5, max_tokens=300)
+        answer, chunk_ids, scores = generate_rag_answer(user_message, k=5, max_tokens=200)
         
         # Prepare metadata
         metadata = {
@@ -295,8 +301,12 @@ def chat():
             'retrieval_scores': scores,
             'model_used': 'RAG+LLM' if MODEL_READY else 'Fallback',
             'has_context': len(chunk_ids) > 0,
-            'top_score': scores[0] if scores else 0.0
+            'top_score': scores[0] if scores else 0.0,
+            'answer_length': len(answer)
         }
+        
+        # Clean up memory
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
         return jsonify({
             'reply': answer,
