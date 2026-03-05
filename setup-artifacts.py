@@ -8,7 +8,19 @@ import os
 import sys
 import json
 import re
-import numpy as np
+
+# Ensure we can import from site-packages
+if '/usr/local/lib' not in sys.path:
+    sys.path.insert(0, '/usr/local/lib/python3.10/dist-packages')
+if '/usr/lib' not in sys.path:
+    sys.path.insert(0, '/usr/lib/python3/dist-packages')
+
+try:
+    import numpy as np
+except ImportError:
+    print("❌ numpy not found. Installing...")
+    os.system(f"{sys.executable} -m pip install numpy sentence-transformers faiss-cpu")
+    import numpy as np
 
 def clean_text(s: str) -> str:
     """Clean text preprocessing"""
@@ -82,9 +94,20 @@ def main():
             normalize_embeddings=True
         ).astype("float32")
         print(f"   ✓ Generated embeddings: {embeddings.shape}")
+    except ImportError:
+        print("   ❌ sentence-transformers not found. Installing...")
+        os.system(f"{sys.executable} -m pip install sentence-transformers")
+        from sentence_transformers import SentenceTransformer
+        embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        embeddings = embedder.encode(
+            chunks,
+            show_progress_bar=True,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        ).astype("float32")
+        print(f"   ✓ Generated embeddings: {embeddings.shape}")
     except Exception as e:
         print(f"   ❌ Error: {e}")
-        print("   Install with: pip install sentence-transformers")
         sys.exit(1)
     
     # Build FAISS index
@@ -96,9 +119,16 @@ def main():
         index = faiss.IndexFlatIP(dim)
         index.add(embeddings)
         print(f"   ✓ FAISS index with {index.ntotal} vectors")
+    except ImportError:
+        print("   ❌ faiss-cpu not found. Installing...")
+        os.system(f"{sys.executable} -m pip install faiss-cpu")
+        import faiss
+        dim = embeddings.shape[1]
+        index = faiss.IndexFlatIP(dim)
+        index.add(embeddings)
+        print(f"   ✓ FAISS index with {index.ntotal} vectors")
     except Exception as e:
         print(f"   ❌ Error: {e}")
-        print("   Install with: pip install faiss-cpu")
         sys.exit(1)
     
     # Save artifacts
