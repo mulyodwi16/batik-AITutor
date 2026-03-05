@@ -193,7 +193,7 @@ def build_rag_context(query, k=5, threshold=0.25, max_chars=1500):
     return context[:max_chars], valid_ids, valid_scores
 
 def generate_rag_answer(query, k=5, max_tokens=200):
-    """Generate answer using RAG + LLM"""
+    """Generate answer using RAG + LLM with synthesis (not raw chunks)"""
     if not MODEL_READY:
         logger.warning(f"Model not ready, using fallback for query: {query}")
         return _fallback_answer(query), [], []
@@ -202,35 +202,41 @@ def generate_rag_answer(query, k=5, max_tokens=200):
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(query, k=k, threshold=0.25)
         
-        # Build prompt dengan instruction yang lebih ketat
+        # Build prompt dengan EXPLICIT instruction untuk synthesize, bukan copy-paste
         if context:
-            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan pengguna dengan jelas, singkat, dan hanya berdasarkan informasi di dokumen.
-Jika informasi tidak ada di dokumen, katakan "Informasi tidak tersedia".
-Jangan menambahkan informasi di luar dokumen.
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia yang berpengalaman.
 
-INFORMASI DOKUMEN:
+TUGAS: Jawab pertanyaan pengguna dengan menggunakan informasi dari dokumen.
+PENTING:
+- Jelaskan dengan kalimat Anda SENDIRI (jangan copy-paste dari dokumen)
+- Buat jawaban yang natural dan mudah dipahami
+- Fokus pada informasi paling relevan
+- Jawab SINGKAT dan JELAS (1-3 kalimat)
+- Gunakan Bahasa Indonesia yang baik
+
+INFORMASI DARI DOKUMEN:
 {context}
 
 PERTANYAAN: {query}
 
-JAWABAN (singkat, jelas, berdasarkan dokumen):"""
+JAWABAN (dalam kalimat Anda sendiri, bukan copy-paste):"""
         else:
-            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dalam Bahasa Indonesia dengan singkat.
+            prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dengan singkat dan jelas dalam Bahasa Indonesia.
 
 PERTANYAAN: {query}
 
 JAWABAN:"""
         
         # Generate dengan LLM - Lower temperature untuk jawaban lebih grounded
-        logger.info(f"Generating answer with context ({len(chunk_ids)} chunks)")
+        logger.info(f"Generating synthesized answer with context ({len(chunk_ids)} chunks)")
         inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
         
         with torch.no_grad():
             output = llm_model.generate(
                 **inputs,
                 max_new_tokens=max_tokens,
-                temperature=0.3,  # LOWERED from 0.7 - more deterministic
-                top_p=0.7,        # LOWERED from 0.9 - more focused
+                temperature=0.25,  # EVEN LOWER - lebih fokus pada synthesis
+                top_p=0.6,         # LOWER - lebih deterministic
                 do_sample=True,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
@@ -242,11 +248,19 @@ JAWABAN:"""
             skip_special_tokens=True
         ).strip()
         
+        # Clean up response - remove extra [Source tags if present, clean formatting
+        response = _clean_response(response)
+        
+        # Validate answer is not just raw chunk (sanity check)
+        if not response or len(response) < 10:
+            logger.warning(f"Answer too short or empty, using fallback")
+            return _fallback_answer(query), chunk_ids, scores
+        
         # Clean up to prevent memory leak
         del inputs, output
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
-        logger.info(f"✓ Generated {len(response)} char response with {len(chunk_ids)} sources")
+        logger.info(f"✓ Generated synthesized answer ({len(response)} chars) with {len(chunk_ids)} sources")
         return response, chunk_ids, scores
     
     except Exception as e:
@@ -254,6 +268,26 @@ JAWABAN:"""
         import traceback
         logger.error(traceback.format_exc())
         return _fallback_answer(query), [], []
+
+def _clean_response(text):
+    """Clean up LLM response - remove artifacts, extra whitespace, format properly"""
+    # Remove [Source X] tags jika ada
+    import re
+    text = re.sub(r'\[Source \d+\]', '', text)
+    text = re.sub(r'\[source \d+\]', '', text)
+    
+    # Remove excess whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Remove markdown artifacts
+    text = re.sub(r'\*\*', '', text)
+    text = re.sub(r'###+', '', text)
+    
+    # Capitalize first letter
+    if text:
+        text = text[0].upper() + text[1:]
+    
+    return text
 
 def _fallback_answer(query):
     """Fallback answer jika LLM tidak ready"""
