@@ -199,7 +199,7 @@ def retrieve_topk(query, k=5, threshold=0.25):
         logger.error(traceback.format_exc())
         return [], []
 
-def build_rag_context(query, k=5, threshold=0.25, max_chars=1500):
+def build_rag_context(query, k=5, threshold=0.25, max_chars=4000):
     """Build context from retrieved chunks"""
     ids, scores = retrieve_topk(query, k=k, threshold=threshold)
     
@@ -239,12 +239,18 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         logger.warning(f"Model not ready, using fallback for query: {query}")
         return _fallback_answer(query), [], []
     
-    # Special handling: detect inventory/total count questions
+    # Special handling: detect inventory/total count questions (Indonesian & English)
     query_lower = query.lower()
     is_inventory_question = (
+        # Indonesian
         ('berapa' in query_lower or 'jumlah' in query_lower or 'total' in query_lower) and
         'batik' in query_lower and
         any(w in query_lower for w in ['motif', 'jenis', 'macam', 'kamu', 'tahu', 'ketahui', 'ada', 'semua'])
+    ) or (
+        # English
+        ('how many' in query_lower or 'how much' in query_lower or 'total' in query_lower) and
+        'batik' in query_lower and
+        any(w in query_lower for w in ['motif', 'type', 'kind', 'know', 'you'])
     )
     if is_inventory_question:
         if inventory_summary:
@@ -255,14 +261,20 @@ def generate_rag_answer(query, k=10, max_tokens=200):
             return _fallback_answer(query), [], []
     
     try:
-        # Detect if this is a counting/enumeration question
-        is_counting_question = any(word in query.lower() for word in ['berapa', 'berapa banyak', 'sebutkan', 'apa saja', 'ada berapa', 'jumlah', 'jenis'])
+        # Detect if this is a counting/enumeration question (Indonesian & English)
+        is_counting_question = any(word in query.lower() for word in [
+            'berapa', 'sebutkan', 'apa saja', 'jumlah', 'jenis', 'macam',  # Indonesian
+            'how many', 'list', 'what are', 'enumerate', 'types of', 'kinds of'  # English
+        ])
         
         # For counting questions, use enough chunks but not too many to avoid confusion
         effective_k = 12 if is_counting_question else k
         
         # Build context dari retrieval
-        context, chunk_ids, scores = build_rag_context(query, k=effective_k, threshold=0.25)
+        context, chunk_ids, scores = build_rag_context(
+            query, k=effective_k, threshold=0.25,
+            max_chars=8000 if is_counting_question else 4000
+        )
         
         # Build messages using standard chat format (apply_chat_template handles any model)
         system_msg = "You are an expert on Indonesian batik. Answer questions clearly and concisely based only on the provided context. Do not invent information."
@@ -306,7 +318,7 @@ Answer briefly based on your knowledge of batik."""
                 "num_predict": 300 if is_counting_question else 200,
             }
         }
-        r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=120)
+        r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
         r.raise_for_status()
         response = r.json()["message"]["content"].strip()
         
