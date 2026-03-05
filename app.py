@@ -96,7 +96,7 @@ def load_llm_model():
     try:
         from transformers import AutoTokenizer, AutoModelForCausalLM
         
-        MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
+        MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
         
         # Force CPU mode (CUDA disabled at top of file)
         device = "cpu"
