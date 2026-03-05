@@ -144,15 +144,18 @@ logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 # This enables metadata pre-filtering — a standard RAG pattern.
 # We inspect chunk text for section headers rather than hardcoding motif names.
 def _build_chunk_locations(chunks_data):
-    """Return a list mapping chunk_index → 'surabaya' | 'jetis' | None."""
+    """Tag each chunk with its location by tracking section headers in order.
+    Chunks are sequential slices of the source document, so we track the
+    'current section' as we scan — far more reliable than keyword matching."""
     locations = []
+    current = None
     for chunk in chunks_data:
-        if 'Batik Motifs from Surabaya' in chunk or 'Surabaya' in chunk and 'Jetis' not in chunk:
-            locations.append('surabaya')
-        elif 'Kampung Batik Jetis' in chunk or 'Sidoarjo' in chunk or 'Jetis' in chunk:
-            locations.append('jetis')
-        else:
-            locations.append(None)   # general / shared knowledge
+        # Section header lines define which location all subsequent chunks belong to
+        if '# Batik Motifs from Kampung Batik Jetis' in chunk:
+            current = 'jetis'
+        elif '# Batik Motifs from Surabaya' in chunk:
+            current = 'surabaya'
+        locations.append(current)
     return locations
 
 chunk_locations = _build_chunk_locations(chunks) if chunks else []
@@ -454,4 +457,4 @@ if __name__ == '__main__':
     print("\n📍 Starting server on http://0.0.0.0:5000")
     print("="*80 + "\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
