@@ -202,8 +202,8 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         # Detect if this is a counting/enumeration question
         is_counting_question = any(word in query.lower() for word in ['berapa', 'berapa banyak', 'sebutkan', 'apa saja', 'ada berapa', 'jumlah', 'jenis'])
         
-        # For counting questions, retrieve MORE chunks
-        effective_k = 15 if is_counting_question else k
+        # For counting questions, use enough chunks but not too many to avoid confusion
+        effective_k = 12 if is_counting_question else k
         
         # Build context dari retrieval
         context, chunk_ids, scores = build_rag_context(query, k=effective_k, threshold=0.25)
@@ -212,18 +212,22 @@ def generate_rag_answer(query, k=10, max_tokens=200):
         if context:
             # For counting/enumeration questions, be more explicit
             if is_counting_question:
-                prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab pertanyaan berikut dengan membaca SELURUH informasi di dokumen.
+                prompt = f"""Anda adalah ahli batik Indonesia.
 
-Untuk pertanyaan yang menanyakan jumlah, jenis, atau sebutkan: JELASKAN LENGKAP dengan menyebutkan semua item/jenis yang Anda found di dokumen. Gunakan kalimat Anda sendiri, bukan copy-paste.
+Tugas: Jawab pertanyaan dengan MENYEBUTKAN SEMUA item/jenis/motif yang ditemukan di dokumen.
+Format jawaban:
+- Gunakan kalimat Anda SENDIRI (jangan copy-paste)
+- Jika diminta sebutkan: tuliskan daftar atau penjelasan setiap item
+- JANGAN membaur atau ulangi informasi yang sama
 
 Dokumen:
 {context}
 
 Pertanyaan: {query}
 
-Jawaban (sebutkan semua yang relevan):"""
+Jawaban (dengan menyebutkan semua yang relevan, jelas dan padat):"""
             else:
-                prompt = f"""Anda adalah AI Tutor Batik Indonesia. Berikan jawaban singkat (1-3 kalimat) ke pertanyaan berikut menggunakan informasi dari dokumen. Jelaskan dengan kalimat Anda sendiri.
+                prompt = f"""Anda adalah AI Tutor Batik Indonesia. Jawab dengan 1-3 kalimat menggunakan informasi dari dokumen.
 
 Dokumen:
 {context}
@@ -245,9 +249,9 @@ Jawaban:"""
         with torch.no_grad():
             output = llm_model.generate(
                 **inputs,
-                max_new_tokens=max_tokens if not is_counting_question else 300,  # MORE tokens untuk counting
-                temperature=0.25,
-                top_p=0.6,
+                max_new_tokens=250 if is_counting_question else 180,  # Slightly more for enumeration
+                temperature=0.2,  # Even lower - more focused
+                top_p=0.5,        # More deterministic
                 do_sample=True,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
@@ -259,8 +263,8 @@ Jawaban:"""
             skip_special_tokens=True
         ).strip()
         
-        # Clean up response
-        response = _clean_response(response)
+        # Clean up response - AGGRESSIVE cleaning for counting questions
+        response = _clean_response(response, is_counting=is_counting_question)
         
         # Validate answer is not just raw chunk (sanity check)
         if not response or len(response) < 10:
@@ -280,17 +284,14 @@ Jawaban:"""
         logger.error(traceback.format_exc())
         return _fallback_answer(query), [], []
 
-def _clean_response(text):
-    """Clean up LLM response - remove artifacts, instructions, extra whitespace"""
+def _clean_response(text, is_counting=False):
+    """Clean up LLM response - remove artifacts, instructions, repetition"""
     import re
     
-    # Remove instruction text that might slip through
-    text = re.sub(r'PENTING:.*?(?=\n|\Z)', '', text, flags=re.DOTALL)
-    text = re.sub(r'INFORMASI DARI DOKUMEN.*?(?=\Z)', '', text, flags=re.DOTALL)
-    text = re.sub(r'PERTANYAAN:.*?(?=\Z)', '', text, flags=re.DOTALL)
-    text = re.sub(r'JAWABAN.*?:', '', text, flags=re.DOTALL)
+    # Remove common instruction text that might slip through
+    text = re.sub(r'Tugas:|Format jawaban:|Dokumen:|Pertanyaan:|Jawaban.*?:', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'PENTING:|INFORMASI DARI DOKUMEN:|PERTANYAAN:|JAWABAN', '', text, flags=re.IGNORECASE)
     text = re.sub(r'jangan.*?copy-paste', '', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'(jelaskan|gunakan|buat|fokus).*?(?=\n|\Z)', '', text, flags=re.IGNORECASE | re.DOTALL)
     
     # Remove [Source X] tags
     text = re.sub(r'\[Source \d+\]', '', text)
@@ -301,26 +302,48 @@ def _clean_response(text):
     text = re.sub(r'###+', '', text)
     text = re.sub(r'__+', '', text)
     
-    # Remove bullet points and dashes at start of lines
+    # Remove bullet points at start of lines
     text = re.sub(r'^\s*[-•*]\s+', '', text, flags=re.MULTILINE)
     
-    # Clean double dashes/lines
-    text = re.sub(r'\s*-{2,}\s*', ' ', text)
+    # For counting questions - remove repetitive lines aggressively
+    if is_counting:
+        lines = text.split('\n')
+        seen_lines = set()
+        unique_lines = []
+        for line in lines:
+            line = line.strip()
+            # Normalize for dedup
+            norm_line = re.sub(r'\s+', ' ', line).lower()
+            if line and norm_line not in seen_lines and len(line) > 5:
+                # Skip very instruction-like lines
+                if not any(kw in line.lower() for kw in ['pertanyaan', 'jawaban', 'dokumen', 'tugas', 'format']):
+                    seen_lines.add(norm_line)
+                    unique_lines.append(line)
+        text = '\n'.join(unique_lines)
     
-    # Remove excess whitespace
+    # Clean whitespace and normalize
     text = re.sub(r'\s+', ' ', text).strip()
     
-    # Fix sentence fragments - ensure proper punctuation
-    sentences = text.split('.')
-    cleaned = []
-    for s in sentences:
-        s = s.strip()
-        if s and len(s) > 5:  # Skip very short fragments
-            # Skip if it looks like instructions
-            if not any(kw in s.lower() for kw in ['penting', 'instruksi', 'tugas', 'gunakan', 'jangan']):
-                cleaned.append(s)
+    # Remove any remaining double words/fragments
+    words = text.split()
+    # Remove obvious duplicates (same word appearing 3+ times in a row)
+    cleaned_words = []
+    prev_word = None
+    repeat_count = 0
+    for word in words:
+        if word.lower() == prev_word.lower() if prev_word else False:
+            repeat_count += 1
+            if repeat_count < 2:  # Allow one repeat
+                cleaned_words.append(word)
+        else:
+            cleaned_words.append(word)
+            prev_word = word
+            repeat_count = 0
     
-    text = '. '.join(cleaned)
+    text = ' '.join(cleaned_words)
+    
+    # Ensure proper punctuation
+    text = text.strip()
     if text and not text.endswith('.'):
         text += '.'
     
@@ -328,7 +351,7 @@ def _clean_response(text):
     if text:
         text = text[0].upper() + text[1:]
     
-    return text.strip()
+    return text
 
 def _fallback_answer(query):
     """Fallback answer jika LLM tidak ready"""
