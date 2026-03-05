@@ -349,8 +349,8 @@ Answer briefly based on your knowledge of batik."""
             {"role": "user",   "content": user_msg},
         ]
         
-        # Call Ollama API
-        import requests
+        # Call Ollama API (with 1 retry on empty response)
+        import requests, time
         logger.info(f"Calling Ollama '{OLLAMA_MODEL}' (counting={is_counting_question}, k={effective_k}, chunks={len(chunk_ids)})")
         payload = {
             "model": OLLAMA_MODEL,
@@ -363,12 +363,18 @@ Answer briefly based on your knowledge of batik."""
                 "num_predict": 300 if is_counting_question else 200,
             }
         }
-        r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
-        r.raise_for_status()
-        response = r.json()["message"]["content"].strip()
         
-        # Light cleanup (Ollama usually returns clean text)
-        response = _clean_response(response, is_counting=is_counting_question)
+        response = ""
+        for attempt in range(2):  # try up to 2 times
+            r = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=180)
+            r.raise_for_status()
+            raw = r.json()["message"]["content"].strip()
+            logger.info(f"Ollama raw response (attempt {attempt+1}): {raw[:120]!r}")
+            response = _clean_response(raw, is_counting=is_counting_question)
+            if response and len(response) >= 10:
+                break
+            logger.warning(f"Attempt {attempt+1}: response too short ({len(response)} chars), retrying...")
+            time.sleep(1)
         
         if not response or len(response) < 10:
             logger.warning("Answer too short or empty, using fallback")
