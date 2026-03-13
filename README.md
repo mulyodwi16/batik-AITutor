@@ -255,7 +255,7 @@ Get suggestion prompts
 - **Parameters**: 20 Billion
 - **Backend**: Ollama (Local Inference)
 - **URL**: `http://localhost:11434`
-- **Memory**: 8-16GB (recommend GPU for fast inference
+- **Memory**: 8-16GB (recommend GPU for fast inference)
 - 
 ### FAISS Index
 - **Type**: IndexFlatIP (cosine similarity)
