@@ -72,14 +72,16 @@ batik-AITutor/
 
 ```
 
-## Persyaratan
+## Requirements
 
 - Python 3.9+
-- **Ollama** (untuk LLM inference) - download dari [ollama.ai](https://ollama.ai)
-- **Model**: gpt-oss:20b (jalankan `ollama pull gpt-oss:20b`)
-- CUDA-compatible GPU (recommended) atau CPU (slower)
-- 4GB+ RAM untuk Ollama inference
-- Docker & Docker Compose (untuk deployment)
+- Ollama (for LLM inference)
+- Model: gpt-oss:20b
+- 4GB+ RAM (8–16GB recommended)
+- CUDA-compatible GPU (optional but recommended)
+
+Docker & Docker Compose are **optional** and only required for containerized deployment.
+The application can run directly with Python.
 
 ## Quick Start (Penting)
 
