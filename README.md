@@ -272,7 +272,7 @@ Edit `app.py` untuk customize:
 embedder = SentenceTransformer("model-name")
 
 # Ubah LLM model
-MODEL_NAME = "TinyLlama/..."
+MODEL_NAME = "gpt-oss:20b"
 
 # Ubah retrieval parameters
 retrieve_topk(query, k=5, threshold=0.35)
