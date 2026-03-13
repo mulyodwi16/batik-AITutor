@@ -296,7 +296,7 @@ top_p=0.9, temperature=0.7, max_tokens=300
 
 ### Port 5000 sudah digunakan
 ```bash
-docker-compose -f docker-compose.yml up -p 8000:5000
+docker run -p 8000:5000
 ```
 
 ### Model loading lambat
