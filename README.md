@@ -161,7 +161,7 @@ http://localhost:5000
 curl http://localhost:5000/api/health
 ```
 
-### Opsi 2: Docker Compose (Recommended)
+### Opsi 2: Docker Compose (Optional)
 
 **IMPORTANT: Setup Ollama & artifacts first!**
 
