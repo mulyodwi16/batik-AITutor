@@ -25,6 +25,24 @@ Chatbot pendidikan interaktif dengan **RAG (Retrieval Augmented Generation) + LL
 ## System Architecture
 
 ```
+User Query
+    ↓
+Embedding (sentence-transformers)
+    ↓
+FAISS Index Search
+    ↓
+Top-k Retrieval
+    ↓
+Context Construction
+    ↓
+Ollama API (gpt-oss:20b)
+    ↓
+LLM Response
+```
+
+## Repo Structure
+
+```
 batik-AITutor/
 │
 ├── app.py
