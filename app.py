@@ -19,37 +19,48 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 def load_chunks():
+    """Load chunks AND metadata from chunks.json (v2.0 format)"""
     chunks_path = 'artifacts/chunks.json'
     if os.path.exists(chunks_path):
         try:
             with open(chunks_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Handle both {"chunks": [...]} and [...]
-                if isinstance(data, dict):
-                    chunks = data.get('chunks', data)
-                else:
-                    chunks = data
                 
-                if isinstance(chunks, list) and len(chunks) > 0:
-                    logger.info(f"✅ Chunks loaded from {chunks_path}: {len(chunks)} chunks")
-                    return chunks
+                # v2.0 format: {"metadata": {...}, "chunks": [...], "chunk_metadata": [...]}
+                if isinstance(data, dict) and 'chunks' in data:
+                    chunks = data.get('chunks', [])
+                    chunk_metadata = data.get('chunk_metadata', [])
+                    metadata_v = data.get('metadata', {})
+                    
+                    if isinstance(chunks, list) and len(chunks) > 0:
+                        logger.info(f"✅ Chunks loaded: {len(chunks)} chunks (v{metadata_v.get('version', '1.0')})")
+                        if chunk_metadata:
+                            logger.info(f"✅ Metadata loaded: {len(chunk_metadata)} entries")
+                        return chunks, chunk_metadata
+                    else:
+                        logger.warning(f"⚠️  chunks.json exists but is empty")
+                        return [], []
+                # Fallback for old format
+                elif isinstance(data, list):
+                    logger.info(f"✅ Loaded legacy format: {len(data)} chunks")
+                    return data, []
                 else:
-                    logger.warning(f"⚠️  chunks.json exists but is empty or invalid")
-                    return []
+                    logger.warning(f"⚠️  Invalid chunks.json format")
+                    return [], []
         except Exception as e:
             logger.error(f"❌ Error parsing chunks.json: {e}")
-            return []
+            return [], []
     else:
-        logger.warning(f"⚠️  {chunks_path} not found. RAG will be disabled. Run AI_Tutor.ipynb to generate artifacts.")
-        return []
+        logger.warning(f"⚠️  {chunks_path} not found. RAG will be disabled. Run setup-artifacts-new.py to generate artifacts.")
+        return [], []
 
 def load_artifacts():
-    """Load FAISS index, chunks, and embedder"""
+    """Load FAISS index, chunks, metadata, and embedder"""
     try:
         import faiss
         from sentence_transformers import SentenceTransformer
         
-        chunks = load_chunks()
+        chunks, chunk_metadata = load_chunks()
         index = None
         embedder = None
         
@@ -77,13 +88,13 @@ def load_artifacts():
         else:
             logger.warning(f"⚠️  Partial artifact loading - chunks:{len(chunks)}, faiss:{index is not None}, embedder:{embedder is not None}")
         
-        return chunks, index, embedder
+        return chunks, index, embedder, chunk_metadata
     
     except Exception as e:
         logger.error(f"❌ Error in load_artifacts: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return [], None, None
+        return [], None, None, []
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL    = "gpt-oss:20b"
@@ -109,59 +120,70 @@ def load_llm_model():
         logger.error(f"❌ Cannot reach Ollama at {OLLAMA_BASE_URL}: {e}")
         return None, None
 
-def build_inventory_summary(chunks_data):
-    """Extract motif list from chunks — used only in /api/health for diagnostics."""
+def build_inventory_summary(metadata_list):
+    """Extract motif list from chunk_metadata — used only in /api/health for diagnostics."""
     try:
-        import re
-        full_text = '\n'.join(chunks_data)
-        jetis_start   = full_text.find('# Batik Motifs from Kampung Batik Jetis')
-        surabaya_start = full_text.find('# Batik Motifs from Surabaya')
-        jetis_text    = full_text[jetis_start:surabaya_start] if jetis_start != -1 and surabaya_start != -1 else ''
-        surabaya_text = full_text[surabaya_start:] if surabaya_start != -1 else ''
-        def _parse(text):
-            ms = [m.strip() for m in re.findall(r'#{2,3}\s+([\w\s\-\(\)]+?)\s+Motif(?!\w)', text)
-                  if 'from' not in m and 'Meaning' not in m and 'Visual' not in m]
-            return list(dict.fromkeys(ms))
-        inv = {'jetis': _parse(jetis_text), 'surabaya': _parse(surabaya_text)}
-        total = len(inv['jetis']) + len(inv['surabaya'])
-        logger.info(f"✅ Inventory: {total} motifs ({len(inv['jetis'])} Jetis, {len(inv['surabaya'])} Surabaya)")
-        return inv
+        inv = {'jetis': set(), 'surabaya': set(), 'knowledge': set()}
+        
+        for meta in metadata_list:
+            if not isinstance(meta, dict):
+                continue
+            
+            location = meta.get('location', '').lower()
+            title = meta.get('file_title', '')
+            subcategory = meta.get('subcategory', '')
+            
+            # Classify by location
+            if 'sidoarjo' in location or 'jetis' in location:
+                if subcategory == 'motif':
+                    inv['jetis'].add(title)
+            elif 'surabaya' in location:
+                if subcategory == 'motif':
+                    inv['surabaya'].add(title)
+            elif subcategory == 'culture' or subcategory == 'village':
+                inv['knowledge'].add(title)
+        
+        # Convert sets to sorted lists
+        inv_list = {
+            'jetis': sorted(inv['jetis']),
+            'surabaya': sorted(inv['surabaya']),
+            'knowledge': sorted(inv['knowledge'])
+        }
+        total = sum(len(v) for v in inv_list.values())
+        logger.info(f"✅ Inventory: {total} items ({len(inv_list['jetis'])} Jetis, {len(inv_list['surabaya'])} Surabaya, {len(inv_list['knowledge'])} knowledge)")
+        return inv_list
     except Exception as e:
         logger.error(f"❌ build_inventory_summary: {e}")
-        return {}
+        return {'jetis': [], 'surabaya': [], 'knowledge': []}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Startup — load all artifacts once
 # ─────────────────────────────────────────────────────────────────────────────
-chunks, faiss_index, embedder = load_artifacts()
+chunks, faiss_index, embedder, chunk_metadata = load_artifacts()
 ollama_model_name, _ = load_llm_model()
 tokenizer    = ollama_model_name          # kept for MODEL_READY compat
-inventory_data = build_inventory_summary(chunks) if chunks else {}
+inventory_data = build_inventory_summary(chunk_metadata) if chunk_metadata else {}
 MODEL_READY  = embedder is not None and faiss_index is not None and tokenizer is not None
 logger.info(f"🚀 Model status: {'READY' if MODEL_READY else 'FALLBACK MODE'}")
 
-# ── Chunk metadata: tag each chunk with its location (built once at startup) ─
-# This enables metadata pre-filtering — a standard RAG pattern.
-# We inspect chunk text for section headers rather than hardcoding motif names.
-def _build_chunk_locations(chunks_data):
-    """Tag each chunk with its location by tracking section headers in order.
-    Chunks are sequential slices of the source document, so we track the
-    'current section' as we scan — far more reliable than keyword matching."""
-    locations = []
-    current = None
-    for chunk in chunks_data:
-        # Section header lines define which location all subsequent chunks belong to
-        if '# Batik Motifs from Kampung Batik Jetis' in chunk:
-            current = 'jetis'
-        elif '# Batik Motifs from Surabaya' in chunk:
-            current = 'surabaya'
-        locations.append(current)
+# ── Build chunk location map from metadata (for filtering) ──────────────────
+# Maps chunk ID → location (more reliable than text parsing)
+def _build_chunk_locations_from_metadata(metadata_list):
+    """Build location map from structured metadata."""
+    locations = {}
+    for i, meta in enumerate(metadata_list):
+        location = meta.get('location', '')
+        if 'sidoarjo' in location.lower() or 'jetis' in location.lower():
+            locations[i] = 'jetis'
+        elif 'surabaya' in location.lower():
+            locations[i] = 'surabaya'
+        else:
+            locations[i] = 'general'
     return locations
 
-chunk_locations = _build_chunk_locations(chunks) if chunks else []
-logger.info(f"📍 Chunk locations tagged: {chunk_locations.count('jetis')} jetis, "
-            f"{chunk_locations.count('surabaya')} surabaya, "
-            f"{chunk_locations.count(None)} general")
+chunk_location_map = _build_chunk_locations_from_metadata(chunk_metadata) if chunk_metadata else {}
+logger.info(f"📍 Chunk locations loaded from metadata: {len([l for l in chunk_location_map.values() if l == 'jetis'])} jetis, "
+            f"{len([l for l in chunk_location_map.values() if l == 'surabaya'])} surabaya")
 
 # ============================================================
 # RAG + LLM FUNCTIONS  (pure pipeline — no keyword rules)
@@ -193,7 +215,7 @@ def _detect_location(query: str):
 
 
 def retrieve_topk(query, k=25):
-    """Embed query → FAISS top-k → optional metadata location filter.
+    """Embed query → FAISS top-k → metadata-based location filter.
     When a city/village is named in the query, only chunks tagged to that
     location (plus general chunks) are kept — this is standard metadata
     pre-filtering, not keyword-based intent routing."""
@@ -207,18 +229,19 @@ def retrieve_topk(query, k=25):
         id_list    = ids[0].tolist()
         score_list = scores[0].tolist()
 
-        # Metadata pre-filter: if query names a location, drop chunks from
-        # the OTHER location to keep context focused.
+        # Metadata pre-filter: if query names a location, use location map
+        # to drop chunks from the OTHER location for better context focus.
         loc = _detect_location(query)
-        if loc and chunk_locations:
+        if loc and chunk_location_map:
             opposite = 'jetis' if loc == 'surabaya' else 'surabaya'
             filtered_ids, filtered_scores = [], []
             for cid, sc in zip(id_list, score_list):
-                if cid < len(chunk_locations) and chunk_locations[cid] != opposite:
+                chunk_loc = chunk_location_map.get(cid, 'general')
+                if chunk_loc != opposite:  # Keep same location + general
                     filtered_ids.append(cid)
                     filtered_scores.append(sc)
             id_list, score_list = filtered_ids, filtered_scores
-            logger.info(f"📍 Location filter '{loc}': {len(id_list)} chunks remain")
+            logger.info(f"📍 Location filter '{loc}': {len(id_list)} chunks remain (dropped {len(id_list)} from opposite)")
 
         logger.info(f"🔍 Retrieved {len(id_list)} chunks for: {query!r}")
         return id_list, score_list
