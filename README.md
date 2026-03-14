@@ -1,59 +1,93 @@
-# 🎨 Batik AI-Tutor
+# Batik AI-Tutor
 
 Chatbot pendidikan interaktif dengan **RAG (Retrieval Augmented Generation) + LLM** untuk mempelajari warisan budaya Batik Indonesia. Dibangun dengan Flask, menggunakan semantic search dengan FAISS dan LLM untuk generate jawaban.
 
-## ✨ Fitur Utama
+## Fitur Utama
 
-### 🤖 RAG + LLM Pipeline
+### RAG + LLM Pipeline
 - **Semantic Search**: FAISS indexing untuk fast similarity search (cosine distance)
 - **Retrieval**: Top-k relevant chunks dari knowledge base
 - **LLM Generation**: Ollama GPT 20B untuk generate context-aware answers
 - **Smart Fallback**: Rule-based responses jika Ollama tidak tersedia
 
-### 💬 Chat Interface
+### Chat Interface
 - Real-time chatbot dengan streaming responses
 - Responsive design untuk mobile & desktop
 - Retrieval confidence scores ditampilkan
 - Suggestion buttons untuk quick learning
 
-### 📚 Knowledge Base
+### Knowledge Base
 - 25 semantic chunks dari batik knowledge
 - Embedding vectors (384-dimensional / all-MiniLM-L6-v2)
 - FAISS index untuk O(1) retrieval complexity
 - Comprehensive batik information (sejarah, motif, proses, warisan, regional)
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```
 User Query
     ↓
 Embedding (sentence-transformers)
     ↓
-FAISS Index Search (top-k retrieval)
+FAISS Index Search
     ↓
-Build Context (chunks + scores)
+Top-k Retrieval
     ↓
-Ollama API Call
+Context Construction
     ↓
-✨ GPT 20B Generation ✨
+Ollama API (gpt-oss:20b)
     ↓
-Response + Metadata
+LLM Response
 ```
 
-## 📋 Persyaratan
+## Repo Structure
+
+```
+batik-AITutor/
+│
+├── app.py
+├── requirements.txt
+├── setup-artifacts.py
+├── learn-batikindonesia.md
+├── AI_Tutor.ipynb
+│
+├── artifacts/
+│   ├── chunks.json
+│   ├── embeddings.npy
+│   └── faiss.index
+│
+├── templates/
+│   └── index.html
+│
+├── static/
+│   ├── css/
+│   │   └── style.css
+│   └── js/
+│       └── chat.js
+│
+├── Dockerfile              # OPTIONAL deployment
+├── docker-compose.yml      # OPTIONAL deployment
+│
+└── README.md
+
+```
+
+## Requirements
 
 - Python 3.9+
-- **Ollama** (untuk LLM inference) - download dari [ollama.ai](https://ollama.ai)
-- **Model**: gpt-oss:20b (jalankan `ollama pull gpt-oss:20b`)
-- CUDA-compatible GPU (recommended) atau CPU (slower)
-- 4GB+ RAM untuk Ollama inference
-- Docker & Docker Compose (untuk deployment)
+- Ollama (for LLM inference)
+- Model: gpt-oss:20b
+- 4GB+ RAM (8–16GB recommended)
+- CUDA-compatible GPU (optional but recommended)
 
-## 🚀 Quick Start (⚡ Penting!)
+Docker & Docker Compose are **optional** and only required for containerized deployment.
+The application can run directly with Python.
+
+## Quick Start (Penting)
 
 ### Prerequisites: Setup Ollama + Generate Artifacts
 
-#### 1️⃣ Setup Ollama
+#### 1️ Setup Ollama
 ```bash
 # Download & install Ollama dari https://ollama.ai
 # Jalankan Ollama service (akan run di localhost:11434)
@@ -66,7 +100,7 @@ ollama pull gpt-oss:20b
 ollama list
 ```
 
-#### 2️⃣ Generate Knowledge Base Artifacts
+#### 2️ Generate Knowledge Base Artifacts
 
 **Option A: Pakai helper script (Recommended)**
 ```bash
@@ -87,7 +121,7 @@ python setup-artifacts.py
 
 ---
 
-## 🚀 Cara Menjalankan
+## Cara Menjalankan
 
 ### Opsi 1: Lokal (tanpa Docker)
 
@@ -127,7 +161,7 @@ http://localhost:5000
 curl http://localhost:5000/api/health
 ```
 
-### Opsi 2: Docker Compose (Recommended)
+### Opsi 2: Docker Compose (Optional)
 
 **IMPORTANT: Setup Ollama & artifacts first!**
 
@@ -160,7 +194,7 @@ docker-compose down
 
 ---
 
-## 🔍 API Endpoints
+## API Endpoints
 
 ### POST `/api/chat`
 Main chat endpoint dengan RAG + LLM
@@ -208,32 +242,7 @@ Get suggestion prompts
   ]
 }
 ```
-
-## 📁 Struktur Proyek
-
-```
-AI-Tutor/
-├── app.py                      # Flask app dengan RAG + LLM
-├── requirements.txt            # Python dependencies
-├── Dockerfile                  # Container config
-├── docker-compose.yml          # Docker Compose setup
-│
-├── templates/
-│   └── index.html             # Chat UI
-│
-├── static/
-│   ├── css/
-│   │   └── style.css          # Batik-themed styling
-│   └── js/
-│       └── chat.js            # Chat functionality
-│
-└── artifacts/
-    ├── chunks.json            # 25 knowledge chunks
-    ├── embeddings.npy         # FAISS vectors (25×384)
-    └── faiss.index            # Searchable index
-```
-
-## 🎯 Model Configuration
+## Model Configuration
 
 ### Embedder Model
 - **Name**: `sentence-transformers/all-MiniLM-L6-v2`
@@ -242,13 +251,12 @@ AI-Tutor/
 - **Size**: 22MB
 
 ### LLM Model
-- **Name**: `TinyLlama-1.1B-Chat-v1.0`
-- **Parameter (Ollama)
 - **Name**: `gpt-oss:20b` (GPT Open Source)
 - **Parameters**: 20 Billion
 - **Backend**: Ollama (Local Inference)
 - **URL**: `http://localhost:11434`
-- **Memory**: 8-16GB (recommend GPU for fast inference
+- **Memory**: 8-16GB (recommend GPU for fast inference)
+- 
 ### FAISS Index
 - **Type**: IndexFlatIP (cosine similarity)
 - **Complexity**: O(n) search, O(1) for fixed k
@@ -264,7 +272,7 @@ Edit `app.py` untuk customize:
 embedder = SentenceTransformer("model-name")
 
 # Ubah LLM model
-MODEL_NAME = "TinyLlama/..."
+MODEL_NAME = "gpt-oss:20b"
 
 # Ubah retrieval parameters
 retrieve_topk(query, k=5, threshold=0.35)
@@ -288,7 +296,8 @@ top_p=0.9, temperature=0.7, max_tokens=300
 
 ### Port 5000 sudah digunakan
 ```bash
-docker-compose -f docker-compose.yml up -p 8000:5000
+# Jalankan Flask di port lain
+python app.py --port 8000
 ```
 
 ### Model loading lambat
@@ -315,14 +324,14 @@ Untuk meningkatkan kualitas:
 3. **Fine-tuning**: Fine-tune embedder/LLM khusus batik domain
 4. **Retrieval Optimization**: Adjust threshold dan k parameter
 
-## 🎓 Learning Path
+## Learning Path
 
 1. **Understand RAG**: Read about Retrieval Augmented Generation
 2. **Try Basic Chat**: Test dengan suggestion prompts
 3. **Check Metadata**: Lihat retrieval scores dan sources
 4. **Explore Notebook**: See `AI_Tutor.ipynb` untuk detail teknis
 
-## 🚀 Production Deployment
+## Production Deployment
 
 Untuk production:
 
@@ -337,16 +346,18 @@ docker-compose up -d --scale chatbot=3
 # Add monitoring (prometheus/grafana)
 ```
 
-## 📝 License
+## License
 
 Bagian dari Riset KAIT 2026, Politeknik Elektronika Negeri Surabaya.
 
-## 👥 Authors
+## Authors
 
-Tim AI-Tutor @ PENS
+Takano-sensei
+Rante-sensei
+Dwi-san
 
 ---
 
-**Dibuat dengan ❤️ untuk melestarikan warisan budaya Batik Indonesia** 🎨
+**Dibuat dengan ❤️ untuk melestarikan warisan budaya Batik Indonesia**
 
 *Last Updated: March 5, 2026*
