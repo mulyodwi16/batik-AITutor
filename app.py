@@ -97,7 +97,7 @@ def load_artifacts():
         return [], None, None, []
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL    = "gpt-oss:20b"
+OLLAMA_MODEL    = "qwen2.5:14b"
 
 import requests as _req  # module-level import for Ollama calls
 
@@ -193,34 +193,87 @@ logger.info(f"📍 Chunk locations loaded from metadata: {len([l for l in chunk_
 _SYSTEM_PROMPT = """You are an expert AI tutor on Indonesian batik (Batik AI-Tutor).
 Answer the user's question using ONLY the context provided.
 
-Rules:
-1. COUNT carefully — if asked how many motifs exist (overall or per location), count the distinct motif headings in the context and state the exact number.
-2. FILTER by location — if the question mentions a specific place (e.g. Surabaya, Jetis, Sidoarjo), include only motifs/information from that place.
-3. LIST completely — if asked to list or enumerate, include every relevant item from the context without skipping any.
-4. DO NOT invent information that is not in the context.
-5. If the context does not contain the answer, say: "I don't have information about that in my knowledge base."
-6. Answer in the same language the user used (Indonesian or English)."""
+=== CRITICAL RULES ===
+
+1. MOTIF EXTRACTION (Most Important):
+   - Parse headings like "# XXX Motif" or "[Source N]\n# YYY Motif" in context
+   - Extract ALL UNIQUE motif names — check entire context carefully
+   - Count DISTINCT motif titles (use set logic, not chunk count)
+   - List ALL motif names when asked "how many" or "what motifs"
+   - CRITICAL: Make sure you find and list EVERY single motif heading, don't miss any
+   - Example: If context has "Alun-Alun Contong Motif", "Parang Jabon Motif", "Sekar Jagad Motif"
+     CORRECT: "Ada 3 motif: 1) Alun-Alun Contong, 2) Parang Jabon, 3) Sekar Jagad"
+     WRONG: "Batik Jetis memiliki motif-motif tradisional" (too generic)
+   - Always verify: Count = number of "# XXX Motif" headers in context
+
+2. COUNT carefully — if asked for count:
+   - For "Berapa motif dari Jetis?": Extract unique motif names from context and state exact number
+   - For comparisons: Compare specific attributes, not generic descriptions
+   - Always provide NUMBER first, then explanation
+
+3. LIST completely — if asked to list or enumerate:
+   - Include EVERY relevant item from context without skipping
+   - For motifs: List all motif names with brief descriptions if available
+   - Format as numbered list for clarity
+
+4. LOCATION HANDLING:
+   - If question asks about ONE location: use ONLY that location's motifs/information
+   - If question compares MULTIPLE locations: clearly label and separate information by location
+   - Example for comparative: "Jetis memiliki: [list]; Surabaya memiliki: [list]"
+
+5. DO NOT invent information not in context
+   - If context incomplete, say so
+   - If answer not available: "I don't have information about that in my knowledge base."
+
+6. Answer in the same language the user used (Indonesian or English)
+
+7. SPECIFICITY over generic:
+   - Say motif names explicitly rather than "batik memiliki motif-motif"
+   - If context has motif names, MUST list them in answer"""
 
 
 # ── Named-entity location detection (proper nouns only — NOT intent routing) ─
-def _detect_location(query: str):
-    """Return 'surabaya', 'jetis', or None.
-    Only checks proper nouns (city/village names) — not topic or intent."""
+def _detect_locations(query: str):
+    """Return LIST of locations found in query: [], ['surabaya'], ['jetis'], or ['jetis', 'surabaya'].
+    Only checks proper nouns (city/village names) — not topic or intent.
+    
+    This supports BOTH single-location and multi-location (comparative) queries.
+    """
+    locs = []
     q = query.lower()
-    if any(w in q for w in ['surabaya', 'putat jaya', 'wonokromo']):
-        return 'surabaya'
+    
+    # Check for Surabaya (first, but don't return early)
+    if any(w in q for w in ['surabaya', 'putat jaya', 'wonokromo', 'gembili', 'gadung', 'bendul merisi']):
+        locs.append('surabaya')
+    
+    # Check for Jetis (second, so both can be detected)
     if any(w in q for w in ['jetis', 'sidoarjo', 'kampung batik jetis']):
-        return 'jetis'
-    return None
+        locs.append('jetis')
+    
+    return locs
 
 
-def retrieve_topk(query, k=25):
+def retrieve_topk(query, k=None):
     """Embed query → FAISS top-k → metadata-based location filter.
-    When a city/village is named in the query, only chunks tagged to that
-    location (plus general chunks) are kept — this is standard metadata
-    pre-filtering, not keyword-based intent routing."""
+    
+    Location filtering strategy:
+    - No location detected: keep all chunks (generic query), use default k
+    - One location detected: keep only that location + general chunks (focused query), increase k to capture all motifs
+    - Two locations detected: keep both locations + general chunks (comparative query), use larger k
+    
+    This enables both focused and comparative queries to work correctly.
+    """
     if not embedder or not faiss_index:
         return [], []
+    
+    # Auto-determine k if not specified (increased for better motif capture)
+    if k is None:
+        locs = _detect_locations(query)
+        if locs:  # Location filter will be applied
+            k = 40  # Larger for location-specific queries (to capture all motifs from that location)
+        else:
+            k = 25  # Default for generic queries
+    
     try:
         q_emb = embedder.encode(
             [query], convert_to_numpy=True, normalize_embeddings=True, device="cpu"
@@ -229,19 +282,33 @@ def retrieve_topk(query, k=25):
         id_list    = ids[0].tolist()
         score_list = scores[0].tolist()
 
-        # Metadata pre-filter: if query names a location, use location map
-        # to drop chunks from the OTHER location for better context focus.
-        loc = _detect_location(query)
-        if loc and chunk_location_map:
-            opposite = 'jetis' if loc == 'surabaya' else 'surabaya'
-            filtered_ids, filtered_scores = [], []
-            for cid, sc in zip(id_list, score_list):
-                chunk_loc = chunk_location_map.get(cid, 'general')
-                if chunk_loc != opposite:  # Keep same location + general
-                    filtered_ids.append(cid)
-                    filtered_scores.append(sc)
-            id_list, score_list = filtered_ids, filtered_scores
-            logger.info(f"📍 Location filter '{loc}': {len(id_list)} chunks remain (dropped {len(id_list)} from opposite)")
+        # Metadata-based location filtering
+        locs = _detect_locations(query)
+        
+        if locs and chunk_location_map:
+            if len(locs) == 1:
+                # Single location: filter out the opposite location for focus
+                loc = locs[0]
+                opposite = 'jetis' if loc == 'surabaya' else 'surabaya'
+                filtered_ids, filtered_scores = [], []
+                for cid, sc in zip(id_list, score_list):
+                    chunk_loc = chunk_location_map.get(cid, 'general')
+                    if chunk_loc != opposite:  # Keep: same location + general
+                        filtered_ids.append(cid)
+                        filtered_scores.append(sc)
+                id_list, score_list = filtered_ids, filtered_scores
+                logger.info(f"📍 Location filter '{loc}' (single): {len(id_list)} chunks remain")
+            else:
+                # Multiple locations (comparative query): keep all detected locations + general
+                # Don't filter by opposite — both locations are important for comparison
+                filtered_ids, filtered_scores = [], []
+                for cid, sc in zip(id_list, score_list):
+                    chunk_loc = chunk_location_map.get(cid, 'general')
+                    if chunk_loc in locs or chunk_loc == 'general':
+                        filtered_ids.append(cid)
+                        filtered_scores.append(sc)
+                id_list, score_list = filtered_ids, filtered_scores
+                logger.info(f"📍 Locations detected: {locs} (comparative query) → {len(id_list)} chunks")
 
         logger.info(f"🔍 Retrieved {len(id_list)} chunks for: {query!r}")
         return id_list, score_list
@@ -266,8 +333,9 @@ def generate_rag_answer(query):
 
         # ── 2. Build context — cap to keep within Ollama's reliable generation
         #       window. Top-ranked (most relevant) chunks are included first.
-        #       8 000 chars ≈ 2 000 tokens, well within num_ctx=8192 budget.
-        MAX_CONTEXT_CHARS = 8_000
+        #       Ollama num_ctx=8192 allows ~2000 tokens ≈ 8000 chars; bumped to 9500 to ensure
+        #       all motifs are captured for location-specific queries.
+        MAX_CONTEXT_CHARS = 9_500
         parts = []
         total_chars = 0
         for i, cid in enumerate(ids):
@@ -290,8 +358,8 @@ def generate_rag_answer(query):
             ],
             "stream": False,
             "options": {
-                "temperature":    0.1,
-                "top_p":          0.9,
+                "temperature":    0.3,  # Increased from 0.1 for better list generation and motif extraction
+                "top_p":          0.95,  # Slightly increased for more diverse structured outputs
                 "repeat_penalty": 1.2,
                 "num_predict":    512,
                 "num_ctx":        8192,
