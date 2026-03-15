@@ -2,7 +2,7 @@
 title: Gembili Wonokromo Motif
 category: batik
 subcategory: motif
-location: Surabaya - Gembili, Gadung, Bendul Merisi neighborhood
+location: Surabaya
 creator: Wahyu Subiyantoro
 source: learn-batikindonesia
 ---
