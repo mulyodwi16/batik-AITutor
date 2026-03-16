@@ -21,8 +21,8 @@ if '/usr/lib' not in sys.path:
 try:
     import numpy as np
 except ImportError:
-    print("❌ numpy not found. Installing...")
-    os.system(f"{sys.executable} -m pip install numpy sentence-transformers faiss-cpu PyYAML")
+    print("❌ Missing dependencies. Installing all required packages...")
+    os.system(f"{sys.executable} -m pip install numpy sentence-transformers transformers torch huggingface-hub accelerate safetensors faiss-cpu PyYAML")
     import numpy as np
 
 try:
@@ -166,7 +166,13 @@ def generate_embeddings(chunks_with_metadata: List[Dict]):
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         torch.cuda.is_available = lambda: False
         
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            print(f"❌ Failed to import SentenceTransformer: {e}")
+            print("   Attempting to reinstall transformers and sentence-transformers...")
+            os.system(f"{sys.executable} -m pip install --upgrade transformers sentence-transformers")
+            from sentence_transformers import SentenceTransformer
         
         embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
         embeddings = embedder.encode(
@@ -183,6 +189,10 @@ def generate_embeddings(chunks_with_metadata: List[Dict]):
         
     except Exception as e:
         print(f"❌ Error generating embeddings: {e}")
+        print("\n   🔧 Troubleshooting tips:")
+        print("   1. Install all dependencies: pip install -r requirements.txt")
+        print("   2. If transformers error persists: pip install --upgrade transformers")
+        print("   3. Clear pip cache: pip cache purge, then reinstall")
         sys.exit(1)
 
 

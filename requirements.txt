@@ -5,7 +5,7 @@ python-dotenv==1.0.0
 gunicorn==20.1.0
 
 # FAISS & Vector Search
-faiss-cpu==1.7.4
+faiss-cpu>=1.7.4
 
 # RAG + LLM Dependencies (compatible versions)
 sentence-transformers==2.2.2
