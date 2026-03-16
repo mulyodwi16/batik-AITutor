@@ -4,12 +4,14 @@ Panduan lengkap untuk deploy Batik AI-Tutor ke internet.
 
 ## Quick Navigation
 
-### 🚀 Recommended: Tailscale Funnel (Kamu)
-- **Setup Time**: 5 menit
-- **Complexity**: Sangat mudah
-- **Cost**: Gratis
-- **Best untuk**: Lab, research, team collaboration
-- **File**: [QUICK_START_TAILSCALE.md](QUICK_START_TAILSCALE.md) ← **START HERE**
+### 🚀 START HERE: Simple Setup (5 Menit)
+- **File**: [SIMPLE_SETUP.md](SIMPLE_SETUP.md) ← **EVERYONE START HERE**
+- **Includes**: Pull repo → Setup artifacts → Run app → Auto-start service
+- **No Nginx/Gunicorn needed** - just `python app.py`
+
+### 🌐 Optional: Expose to Internet (Tailscale)
+- **Setup Time**: 2 menit lebih setelah step di atas selesai
+- **File**: [QUICK_START_TAILSCALE.md](QUICK_START_TAILSCALE.md)
 - **Detailed**: [TAILSCALE_FUNNEL_GUIDE.md](TAILSCALE_FUNNEL_GUIDE.md)
 
 ### Alternative Options
