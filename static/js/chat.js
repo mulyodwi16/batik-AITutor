@@ -97,16 +97,23 @@ async function sendMessageToBackend(message) {
     addLoadingMessage();
 
     try {
+        // Use AbortController for timeout (LLM generation can be slow, need 180s)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 180 second timeout
+
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({ message: message }),
+            signal: controller.signal
         });
 
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
-            throw new Error('Network response was not ok');
+            throw new Error(`Server error: ${response.status}`);
         }
 
         const data = await response.json();
@@ -127,7 +134,11 @@ async function sendMessageToBackend(message) {
 
     } catch (error) {
         removeLoadingMessage();
-        addMessage('Maaf, terjadi kesalahan saat menghubungi server. Silakan coba lagi.', 'bot');
+        if (error.name === 'AbortError') {
+            addMessage('Tunggu terlalu lama (timeout). Coba pertanyaan yang lebih pendek atau ulangi lagi.', 'bot');
+        } else {
+            addMessage('Maaf, terjadi kesalahan saat menghubungi server. Silakan coba lagi.', 'bot');
+        }
         console.error('Error:', error);
     }
 }

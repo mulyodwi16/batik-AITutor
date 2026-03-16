@@ -253,6 +253,16 @@ def _detect_locations(query: str):
     return locs
 
 
+def _is_motif_enumeration_query(query: str) -> bool:
+    """Detect queries that likely require exhaustive motif retrieval/listing."""
+    q = query.lower()
+    keywords = [
+        'motif', 'berapa', 'jumlah', 'hitung', 'count', 'how many',
+        'semua', 'daftar', 'list', 'sebutkan', 'apa saja'
+    ]
+    return any(k in q for k in keywords)
+
+
 def retrieve_topk(query, k=None):
     """Embed query → FAISS top-k → metadata-based location filter.
     
@@ -266,10 +276,14 @@ def retrieve_topk(query, k=None):
     if not embedder or not faiss_index:
         return [], []
     
-    # Auto-determine k if not specified (increased for better motif capture)
+    # Auto-determine k. Use a wider candidate pool for motif counting/listing
+    # so generic motif queries can still surface complete motif coverage.
     if k is None:
         locs = _detect_locations(query)
-        if locs:  # Location filter will be applied
+        motif_enumeration = _is_motif_enumeration_query(query)
+        if motif_enumeration:
+            k = min(63, faiss_index.ntotal)  # exhaustive search for motif enumeration/count queries
+        elif locs:  # Location filter will be applied
             k = 40  # Larger for location-specific queries (to capture all motifs from that location)
         else:
             k = 25  # Default for generic queries
@@ -444,7 +458,7 @@ def chat():
                 'model': 'empty'
             })
         
-        # Generate answer dengan RAG + LLM (uses default k=10, with auto-detection for counting questions)
+        # Generate answer with RAG + LLM (retrieve_topk auto-tunes candidate size)
         answer, chunk_ids, scores = generate_rag_answer(user_message)
         
         # Prepare metadata
@@ -538,14 +552,14 @@ def startup_info():
 
 if __name__ == '__main__':
     print("\n" + "="*80)
-    print("🚀 Batik AI-Tutor Starting Up")
+    print("[STARTUP] Batik AI-Tutor Starting Up")
     print("="*80)
-    print(f"✅ Chunks loaded: {len(chunks)}")
-    print(f"✅ FAISS index: {'Ready' if faiss_index else 'Not found'}")
-    print(f"✅ Embedder model: {'Loaded' if embedder else 'Failed'}")
-    print(f"✅ Ollama model: {ollama_model_name if ollama_model_name else 'Not reachable (using fallback)'}")
-    print(f"✅ Model status: {'🟢 FULL RAG+LLM' if MODEL_READY else '🟡 FALLBACK MODE'}")
-    print("\n📍 Starting server on http://0.0.0.0:5000")
+    print(f"[OK] Chunks loaded: {len(chunks)}")
+    print(f"[OK] FAISS index: {'Ready' if faiss_index else 'Not found'}")
+    print(f"[OK] Embedder model: {'Loaded' if embedder else 'Failed'}")
+    print(f"[OK] Ollama model: {ollama_model_name if ollama_model_name else 'Not reachable (using fallback)'}")
+    print(f"[OK] Model status: {'FULL RAG+LLM' if MODEL_READY else 'FALLBACK MODE'}")
+    print("\n[INFO] Starting server on http://0.0.0.0:5000")
     print("="*80 + "\n")
     
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
